@@ -1542,9 +1542,19 @@ const addMissingIngredientsToShopping = async (
 
         <p className="recipe-subtitle">Ingrédients :</p>
         <ul className="recipe-list">
-          {r.ingredients.map((ing: string) => (
-            <li key={ing}>{ing}</li>
-          ))}
+          {r.ingredients.map((ing: string) => {
+            const ok = hasIngredient(ing);
+            return (
+              <li
+                key={ing}
+                className={ok ? 'ing-ok' : 'ing-missing'}
+                title={ok ? 'Disponible' : 'Manquant'}
+              >
+                {ok ? '✅ ' : '❌ '}
+                {ing}
+              </li>
+            );
+          })}
         </ul>
 
         {recipesSubTab === 'feasible' && r.missingCount > 0 && (

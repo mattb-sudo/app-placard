@@ -913,3 +913,11 @@ body {
   transition: background-color 9999s ease-out 0s;
 }
 
+.ing-ok {
+  opacity: 1;
+}
+
+.ing-missing {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
