@@ -5,7 +5,6 @@ import { BarcodeScanner } from './BarcodeScanner';
 import './App.css';
 
 type Tab = 'dashboard' | 'stock' | 'shopping' | 'recipes' | 'settings';
-
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
 
 const MAIN_CATEGORIES = [
@@ -42,15 +41,15 @@ type RecipeKind = 'savory' | 'sweet';
 type Recipe = {
   id: string;
   name: string;
-  kind: RecipeKind;          // 'savory' ou 'sweet'
-  ingredients: string[];     // mots-clés (simples) pour faire du matching
-  tags?: string[];           // optionnel
+  kind: RecipeKind;
+  ingredients: string[];
+  tags?: string[];
 };
 
 type Settings = {
-  soonDays: number; // nb de jours avant péremption => "bientôt"
-  recipesMaxMissing: number; // nb max d'ingrédients manquants
-  defaultPlace: string; // lieu par défaut
+  soonDays: number;
+  recipesMaxMissing: number;
+  defaultPlace: string;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -61,9 +60,8 @@ const DEFAULT_SETTINGS: Settings = {
 
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
 
-
 const SAMPLE_RECIPES: Recipe[] = [
-  // SALÉ (5)
+  // SALÉ
   {
     id: 'omelette-fromage',
     name: 'Omelette au fromage',
@@ -100,7 +98,7 @@ const SAMPLE_RECIPES: Recipe[] = [
     tags: ['batch cooking'],
   },
 
-  // SUCRÉ (5)
+  // SUCRÉ
   {
     id: 'pancakes',
     name: 'Pancakes',
@@ -138,6 +136,17 @@ const SAMPLE_RECIPES: Recipe[] = [
   },
 ];
 
+function normalizeText(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function cleanBarcode(raw: string): string {
+  return String(raw).replace(/[^\d]/g, '').trim();
+}
 
 function getExpirationStatus(
   expirationDate: string | null,
@@ -159,47 +168,21 @@ function getExpirationStatus(
   return 'ok';
 }
 
-
 function getExpirationLabel(status: ExpirationStatus): string {
   if (status === 'expired') return 'Périmé';
   if (status === 'soon') return 'À consommer bientôt';
   return 'OK';
 }
 
-// Mapping très simple des catégories Open Food Facts vers tes 5 grandes catégories
 function mapOffCategoryToMainCategory(offCat: string): MainCategory {
   const c = offCat.toLowerCase();
-
-  if (c.includes('épice') || c.includes('herbes') || c.includes('spice')) {
-    return 'Épices';
-  }
-  if (
-    c.includes('ménager') ||
-    c.includes('entretien') ||
-    c.includes('nettoy') ||
-    c.includes('lessive')
-  ) {
+  if (c.includes('épice') || c.includes('herbes') || c.includes('spice')) return 'Épices';
+  if (c.includes('ménager') || c.includes('entretien') || c.includes('nettoy') || c.includes('lessive'))
     return 'Produit ménager';
-  }
-  if (
-    c.includes('sucr') ||
-    c.includes('dessert') ||
-    c.includes('chocolat') ||
-    c.includes('biscuit') ||
-    c.includes('gâteau')
-  ) {
+  if (c.includes('sucr') || c.includes('dessert') || c.includes('chocolat') || c.includes('biscuit') || c.includes('gâteau'))
     return 'Produit sucré';
-  }
-  if (
-    c.includes('complément') ||
-    c.includes('vitamine') ||
-    c.includes('santé') ||
-    c.includes('médicament')
-  ) {
+  if (c.includes('complément') || c.includes('vitamine') || c.includes('santé') || c.includes('médicament'))
     return 'Produit de santé';
-  }
-
-  // Par défaut : salé
   return 'Produit salé';
 }
 
@@ -211,30 +194,22 @@ const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'settings', label: 'Réglages', icon: '⚙️' },
 ];
 
-function normalizeText(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
-}
-
-function cleanBarcode(raw: string): string {
-  return String(raw).replace(/[^\d]/g, '').trim();
-}
-
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('stock');
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [shoppingSubTab, setShoppingSubTab] = useState<'main' | 'others'>(
-    'main',
-  );
+  const [shoppingSubTab, setShoppingSubTab] = useState<'main' | 'others'>('main');
   const [recipesSubTab, setRecipesSubTab] = useState<'feasible' | 'all'>('feasible');
+
   const [loading, setLoading] = useState(true);
+  const [recipesLoading, setRecipesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Champs du formulaire (onglet stock)
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsInfo, setSettingsInfo] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  // Form stock
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [category, setCategory] = useState<MainCategory | ''>('');
@@ -245,10 +220,46 @@ function App() {
   const [barcode, setBarcode] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
-  const [info, setInfo] = useState<string | null>(null);
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [settingsInfo, setSettingsInfo] = useState<string | null>(null);
 
+  // Recettes DB
+  const [dbRecipes, setDbRecipes] = useState<Recipe[]>([]);
+  const [newRecipeName, setNewRecipeName] = useState('');
+  const [newRecipeKind, setNewRecipeKind] = useState<RecipeKind>('savory');
+  const [newRecipeIngredients, setNewRecipeIngredients] = useState('');
+
+  // ---------- Settings localStorage ----------
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Settings>;
+      setSettings((prev) => ({
+        soonDays: typeof parsed.soonDays === 'number' ? parsed.soonDays : prev.soonDays,
+        recipesMaxMissing:
+          typeof parsed.recipesMaxMissing === 'number' ? parsed.recipesMaxMissing : prev.recipesMaxMissing,
+        defaultPlace:
+          typeof parsed.defaultPlace === 'string' && parsed.defaultPlace.trim()
+            ? parsed.defaultPlace
+            : prev.defaultPlace,
+      }));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    setPlace(settings.defaultPlace);
+  }, [settings.defaultPlace]);
+
+  // ---------- OFF autofill ----------
   const autofillFromBarcode = async (code: string) => {
     if (!code) return;
     setAutoFillLoading(true);
@@ -256,35 +267,23 @@ function App() {
 
     try {
       const res = await fetch(
-        `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(
-          code,
-        )}.json`,
+        `https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`,
       );
       const json = await res.json();
 
       if (json.status !== 1) {
-        setError(
-          "Produit introuvable dans Open Food Facts, tu peux remplir les infos à la main.",
-        );
-        setAutoFillLoading(false);
+        setError("Produit introuvable dans Open Food Facts, tu peux remplir les infos à la main.");
         return;
       }
 
       const p = json.product;
 
-      if (!name && p.product_name) {
-        setName(p.product_name);
-      }
-
-      if (!brand && p.brands) {
-        const firstBrand = String(p.brands).split(',')[0].trim();
-        setBrand(firstBrand);
-      }
+      if (!name && p.product_name) setName(p.product_name);
+      if (!brand && p.brands) setBrand(String(p.brands).split(',')[0].trim());
 
       if (!category && p.categories) {
         const firstCategory = String(p.categories).split(',')[0].trim();
-        const mapped = mapOffCategoryToMainCategory(firstCategory);
-        setCategory(mapped);
+        setCategory(mapOffCategoryToMainCategory(firstCategory));
       }
     } catch (e) {
       console.error(e);
@@ -294,33 +293,24 @@ function App() {
     }
   };
 
-    const handleBarcodeDetected = (raw: string) => {
+  const handleBarcodeDetected = (raw: string) => {
     const cleaned = cleanBarcode(raw);
-
     if (!cleaned) {
-      setError("Scan illisible : aucun chiffre détecté. Réessaie en visant mieux le code-barres.");
-      return; // on ne ferme pas forcément, ou tu peux garder ouvert
+      setError('Scan illisible : aucun chiffre détecté. Réessaie en visant mieux le code-barres.');
+      return;
     }
-
     setBarcode(cleaned);
     setShowScanner(false);
     void autofillFromBarcode(cleaned);
   };
 
-  useEffect(() => {
-  setPlace(settings.defaultPlace);
-}, [settings.defaultPlace]);
-
-  // Charger stocks + produits au démarrage
+  // ---------- Fetch Stocks & Products ----------
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       setError(null);
 
-      const {
-        data: stockData,
-        error: stockError,
-      } = await supabase
+      const { data: stockData, error: stockError } = await supabase
         .from('stocks')
         .select(
           `
@@ -373,40 +363,23 @@ function App() {
         setStocks(normalized);
       }
 
-      const {
-        data: productsData,
-        error: productsError,
-      } = await supabase
+      const { data: productsData, error: productsError } = await supabase
         .from('products')
-        .select(
-          `
-          id,
-          name,
-          brand,
-          category,
-          default_unit,
-          barcode,
-          is_main
-        `,
-        );
+        .select(`id,name,brand,category,default_unit,barcode,is_main`);
 
       if (productsError) {
         console.error(productsError);
-        if (!stockError) {
-          setError('Impossible de charger les produits');
-        }
+        if (!stockError) setError('Impossible de charger les produits');
       } else {
-        const normalizedProducts: Product[] = (productsData ?? []).map(
-          (p: any) => ({
-            id: p.id,
-            name: p.name,
-            brand: p.brand,
-            category: p.category,
-            default_unit: p.default_unit,
-            barcode: p.barcode ?? null,
-            is_main: !!p.is_main,
-          }),
-        );
+        const normalizedProducts: Product[] = (productsData ?? []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          brand: p.brand,
+          category: p.category,
+          default_unit: p.default_unit,
+          barcode: p.barcode ?? null,
+          is_main: !!p.is_main,
+        }));
         setProducts(normalizedProducts);
       }
 
@@ -416,60 +389,128 @@ function App() {
     void fetchData();
   }, []);
 
+  // ---------- Recipes DB ----------
+  const fetchRecipes = async () => {
+    setRecipesLoading(true);
+    setError(null);
+
+    const { data, error } = await supabase
+      .from('recipes')
+      .select(
+        `
+        id,
+        name,
+        kind,
+        created_at,
+        recipe_ingredients (
+          ingredient,
+          position
+        )
+      `,
+      )
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error(error);
+      setError('Impossible de charger les recettes.');
+      setRecipesLoading(false);
+      return;
+    }
+
+    const normalized: Recipe[] = (data ?? []).map((r: any) => {
+      const ingredients = (r.recipe_ingredients ?? [])
+        .sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
+        .map((x: any) => String(x.ingredient));
+
+      return {
+        id: r.id,
+        name: r.name,
+        kind: r.kind as RecipeKind,
+        ingredients,
+      };
+    });
+
+    setDbRecipes(normalized);
+    setRecipesLoading(false);
+  };
+
   useEffect(() => {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return;
+    void fetchRecipes();
+  }, []);
 
-    const parsed = JSON.parse(raw) as Partial<Settings>;
-    setSettings((prev) => ({
-      soonDays:
-        typeof parsed.soonDays === 'number' ? parsed.soonDays : prev.soonDays,
-      recipesMaxMissing:
-        typeof parsed.recipesMaxMissing === 'number'
-          ? parsed.recipesMaxMissing
-          : prev.recipesMaxMissing,
-      defaultPlace:
-        typeof parsed.defaultPlace === 'string' && parsed.defaultPlace.trim()
-          ? parsed.defaultPlace
-          : prev.defaultPlace,
+  const createRecipeInDb = async () => {
+    const recipeName = newRecipeName.trim();
+    if (!recipeName) return;
+
+    const ingredients = newRecipeIngredients
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    if (ingredients.length === 0) return;
+
+    setError(null);
+
+    // 1) create recipe
+    const { data: recipeRow, error: recipeErr } = await supabase
+      .from('recipes')
+      .insert({ name: recipeName, kind: newRecipeKind })
+      .select('id, name, kind')
+      .single();
+
+    if (recipeErr || !recipeRow) {
+      console.error(recipeErr);
+      setError("Erreur lors de la création de la recette.");
+      return;
+    }
+
+    // 2) create ingredients
+    const toInsert = ingredients.map((ing, i) => ({
+      recipe_id: recipeRow.id,
+      ingredient: ing,
+      position: i,
     }));
-  } catch (e) {
-    console.error(e);
-  }
-}, []);
 
-useEffect(() => {
-  try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch (e) {
-    console.error(e);
-  }
-}, [settings]);
+    const { error: ingErr } = await supabase.from('recipe_ingredients').insert(toInsert);
 
-  // Marquer / dé-marquer un produit comme "aliment principal"
+    if (ingErr) {
+      console.error(ingErr);
+      setError("Recette créée mais erreur sur les ingrédients.");
+      return;
+    }
+
+    // 3) refresh list
+    setDbRecipes((prev) => [{ id: recipeRow.id, name: recipeRow.name, kind: recipeRow.kind, ingredients }, ...prev]);
+
+    setNewRecipeName('');
+    setNewRecipeIngredients('');
+  };
+
+  const deleteRecipeInDb = async (recipeId: string) => {
+    setError(null);
+
+    const { error } = await supabase.from('recipes').delete().eq('id', recipeId);
+
+    if (error) {
+      console.error(error);
+      setError("Impossible de supprimer la recette.");
+      return;
+    }
+
+    setDbRecipes((prev) => prev.filter((r) => r.id !== recipeId));
+  };
+
+  // ---------- Toggle main ----------
   const handleToggleMain = async (productId: string, currentValue: boolean) => {
     try {
       const { data, error } = await supabase
         .from('products')
         .update({ is_main: !currentValue })
         .eq('id', productId)
-        .select(
-          `
-          id,
-          name,
-          brand,
-          category,
-          default_unit,
-          barcode,
-          is_main
-        `,
-        )
+        .select(`id,name,brand,category,default_unit,barcode,is_main`)
         .single();
 
-      if (error || !data) {
-        throw error || new Error('Erreur mise à jour produit');
-      }
+      if (error || !data) throw error || new Error('Erreur mise à jour produit');
 
       const updated: Product = {
         id: data.id,
@@ -481,7 +522,6 @@ useEffect(() => {
         is_main: !!data.is_main,
       };
 
-      // Mettre à jour la liste des produits
       setProducts((prev) => {
         const idx = prev.findIndex((p) => p.id === updated.id);
         if (idx === -1) return [...prev, updated];
@@ -490,7 +530,6 @@ useEffect(() => {
         return copy;
       });
 
-      // Mettre à jour tous les stocks qui utilisent ce produit
       setStocks((prev) =>
         prev.map((s) =>
           s.product?.id === updated.id
@@ -504,6 +543,7 @@ useEffect(() => {
     }
   };
 
+  // ---------- Add stock ----------
   const handleAdd = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -514,44 +554,23 @@ useEffect(() => {
     }
 
     try {
-      // 1. Trouver ou créer le produit en fonction du code-barres
+      // 1) find/create product by barcode
       let productRow: any | null = null;
       const trimmedBarcode = barcode.trim();
 
       if (trimmedBarcode) {
-        const {
-          data: existingProducts,
-          error: existingProductError,
-        } = await supabase
+        const { data: existingProducts, error: existingProductError } = await supabase
           .from('products')
-          .select(
-            `
-            id,
-            name,
-            brand,
-            category,
-            default_unit,
-            barcode,
-            is_main
-          `,
-          )
+          .select(`id,name,brand,category,default_unit,barcode,is_main`)
           .eq('barcode', trimmedBarcode)
           .limit(1);
 
-        if (existingProductError) {
-          throw existingProductError;
-        }
-
-        if (existingProducts && existingProducts.length > 0) {
-          productRow = existingProducts[0];
-        }
+        if (existingProductError) throw existingProductError;
+        if (existingProducts && existingProducts.length > 0) productRow = existingProducts[0];
       }
 
       if (!productRow) {
-        const {
-          data: productData,
-          error: productError,
-        } = await supabase
+        const { data: productData, error: productError } = await supabase
           .from('products')
           .insert({
             name: name.trim(),
@@ -561,23 +580,10 @@ useEffect(() => {
             barcode: trimmedBarcode || null,
             is_main: false,
           })
-          .select(
-            `
-            id,
-            name,
-            brand,
-            category,
-            default_unit,
-            barcode,
-            is_main
-          `,
-          )
+          .select(`id,name,brand,category,default_unit,barcode,is_main`)
           .single();
 
-        if (productError || !productData) {
-          throw productError || new Error('Erreur création produit');
-        }
-
+        if (productError || !productData) throw productError || new Error('Erreur création produit');
         productRow = productData;
       }
 
@@ -591,7 +597,6 @@ useEffect(() => {
         is_main: !!productRow.is_main,
       };
 
-      // Tenir à jour la liste des produits connus
       setProducts((prev) => {
         const idx = prev.findIndex((p) => p.id === normalizedProduct.id);
         if (idx === -1) return [...prev, normalizedProduct];
@@ -605,83 +610,42 @@ useEffect(() => {
       const trimmedPlace = place.trim();
       const trimmedUnit = unit.trim();
 
-      // 2. Vérifier s'il existe déjà une ligne de stock identique
+      // 2) merge same stock line
       let stockQuery = supabase
         .from('stocks')
-        .select(
-          `
-          id,
-          place,
-          quantity,
-          unit,
-          expiration_date
-        `,
-        )
+        .select(`id,place,quantity,unit,expiration_date`)
         .eq('product_id', productId)
         .eq('place', trimmedPlace)
         .eq('unit', trimmedUnit);
 
-      if (expiration) {
-        stockQuery = stockQuery.eq('expiration_date', expiration);
-      }
+      if (expiration) stockQuery = stockQuery.eq('expiration_date', expiration);
 
-      const {
-        data: existingStocks,
-        error: existingStocksError,
-      } = await stockQuery.limit(1);
-
-      if (existingStocksError) {
-        throw existingStocksError;
-      }
+      const { data: existingStocks, error: existingStocksError } = await stockQuery.limit(1);
+      if (existingStocksError) throw existingStocksError;
 
       const existing = existingStocks && existingStocks[0];
 
       let finalStockRow: any;
 
       if (existing) {
-        // 2a. Mise à jour de la quantité sur la ligne existante
         const newQuantity = (existing.quantity ?? 0) + qtyToAdd;
 
-        const {
-          data: updatedStock,
-          error: updateError,
-        } = await supabase
+        const { data: updatedStock, error: updateError } = await supabase
           .from('stocks')
-          .update({
-            quantity: newQuantity,
-          })
+          .update({ quantity: newQuantity })
           .eq('id', existing.id)
           .select(
             `
-            id,
-            place,
-            quantity,
-            unit,
-            expiration_date,
-            product:products (
-              id,
-              name,
-              brand,
-              category,
-              default_unit,
-              barcode,
-              is_main
-            )
+            id, place, quantity, unit, expiration_date,
+            product:products ( id, name, brand, category, default_unit, barcode, is_main )
           `,
           )
           .single();
 
-        if (updateError || !updatedStock) {
-          throw updateError || new Error('Erreur mise à jour stock');
-        }
-
+        if (updateError || !updatedStock) throw updateError || new Error('Erreur mise à jour stock');
         finalStockRow = updatedStock;
       } else {
-        // 2b. Création d'une nouvelle ligne de stock
-        const {
-          data: stockData,
-          error: stockError,
-        } = await supabase
+        const { data: stockData, error: stockError } = await supabase
           .from('stocks')
           .insert({
             product_id: productId,
@@ -692,41 +656,25 @@ useEffect(() => {
           })
           .select(
             `
-            id,
-            place,
-            quantity,
-            unit,
-            expiration_date,
-            product:products (
-              id,
-              name,
-              brand,
-              category,
-              default_unit,
-              barcode,
-              is_main
-            )
+            id, place, quantity, unit, expiration_date,
+            product:products ( id, name, brand, category, default_unit, barcode, is_main )
           `,
           )
           .single();
 
-        if (stockError || !stockData) {
-          throw stockError || new Error('Erreur création stock');
-        }
-
+        if (stockError || !stockData) throw stockError || new Error('Erreur création stock');
         finalStockRow = stockData;
       }
 
-      // 3. Normalisation pour le state React
       const prodArray = (finalStockRow as any).product;
       const product = Array.isArray(prodArray) ? prodArray[0] : prodArray;
 
       const newItem: StockItem = {
-        id: (finalStockRow as any).id,
-        place: (finalStockRow as any).place,
-        quantity: (finalStockRow as any).quantity,
-        unit: (finalStockRow as any).unit,
-        expiration_date: (finalStockRow as any).expiration_date,
+        id: finalStockRow.id,
+        place: finalStockRow.place,
+        quantity: finalStockRow.quantity,
+        unit: finalStockRow.unit,
+        expiration_date: finalStockRow.expiration_date,
         product: product
           ? {
               id: product.id,
@@ -740,18 +688,14 @@ useEffect(() => {
           : null,
       };
 
-      // 4. Mise à jour du state stocks
       setStocks((prev) => {
         const index = prev.findIndex((s) => s.id === newItem.id);
-        if (index === -1) {
-          return [...prev, newItem];
-        }
+        if (index === -1) return [...prev, newItem];
         const copy = [...prev];
         copy[index] = newItem;
         return copy;
       });
 
-      // 5. Reset du formulaire
       setName('');
       setBrand('');
       setCategory('');
@@ -759,12 +703,117 @@ useEffect(() => {
       setUnit('unité');
       setExpiration('');
       setBarcode('');
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
       setError("Erreur lors de l'ajout du produit");
     }
   };
 
+  // ---------- Shopping helpers ----------
+  const recipeKindToCategory = (kind: RecipeKind) => (kind === 'sweet' ? 'Produit sucré' : 'Produit salé');
+
+  const findExistingProductForKeyword = (keyword: string) => {
+    const key = normalizeText(keyword);
+    return products.find((p) => {
+      const pn = normalizeText(p.name);
+      return pn === key || pn.includes(key) || key.includes(pn);
+    });
+  };
+
+  const ensureProductExistsForShopping = async (keyword: string, kind: RecipeKind) => {
+    const local = findExistingProductForKeyword(keyword);
+    if (local) return { product: local, created: false };
+
+    const { data: existing, error: existingError } = await supabase
+      .from('products')
+      .select('id, name, brand, category, default_unit, barcode, is_main')
+      .ilike('name', `%${keyword}%`)
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    if (existing && existing.length > 0) {
+      const p = existing[0] as any;
+      const normalized: Product = {
+        id: p.id,
+        name: p.name,
+        brand: p.brand,
+        category: p.category,
+        default_unit: p.default_unit,
+        barcode: p.barcode ?? null,
+        is_main: !!p.is_main,
+      };
+      setProducts((prev) => {
+        const idx = prev.findIndex((x) => x.id === normalized.id);
+        if (idx === -1) return [...prev, normalized];
+        const copy = [...prev];
+        copy[idx] = normalized;
+        return copy;
+      });
+      return { product: normalized, created: false };
+    }
+
+    const category = recipeKindToCategory(kind);
+    const { data: created, error: createError } = await supabase
+      .from('products')
+      .insert({
+        name: keyword,
+        brand: null,
+        category,
+        default_unit: null,
+        barcode: null,
+        is_main: false,
+      })
+      .select('id, name, brand, category, default_unit, barcode, is_main')
+      .single();
+
+    if (createError || !created) throw createError || new Error('Erreur création produit');
+
+    const normalized: Product = {
+      id: (created as any).id,
+      name: (created as any).name,
+      brand: (created as any).brand,
+      category: (created as any).category,
+      default_unit: (created as any).default_unit,
+      barcode: (created as any).barcode ?? null,
+      is_main: !!(created as any).is_main,
+    };
+
+    setProducts((prev) => [...prev, normalized]);
+    return { product: normalized, created: true };
+  };
+
+  const addMissingIngredientsToShopping = async (missing: string[], kind: RecipeKind) => {
+    if (!missing || missing.length === 0) return;
+
+    setError(null);
+    setInfo(null);
+
+    try {
+      let createdCount = 0;
+
+      for (const ing of missing) {
+        const trimmed = ing.trim();
+        if (!trimmed) continue;
+        const { created } = await ensureProductExistsForShopping(trimmed, kind);
+        if (created) createdCount += 1;
+      }
+
+      setActiveTab('shopping');
+      setShoppingSubTab('others');
+
+      setInfo(
+        createdCount === 0
+          ? '✅ Ingrédients déjà présents dans tes produits connus. Va voir ta liste de courses.'
+          : `✅ Ajouté ${createdCount} ingrédient(s) à ta liste de courses.`,
+      );
+    } catch (e) {
+      console.error(e);
+      setError("Erreur lors de l'ajout des ingrédients à la liste de courses.");
+    }
+  };
+
+  // ---------- Derived dashboard ----------
   const totalItems = stocks.length;
   const soonItems = stocks.filter(
     (item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'soon',
@@ -778,6 +827,7 @@ useEffect(() => {
     return status === 'soon' || status === 'expired';
   });
 
+  // ---------- Tabs ----------
   const renderStockTab = () => {
     const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
       label: cat,
@@ -789,9 +839,7 @@ useEffect(() => {
         <div className="main-header">
           <div>
             <h1 className="main-title">Placards & frigo</h1>
-            <p className="main-subtitle">
-              Gère ton inventaire en temps réel : lieux, quantités, dates de péremption.
-            </p>
+            <p className="main-subtitle">Gère ton inventaire en temps réel : lieux, quantités, péremption.</p>
           </div>
           <div className="main-header-right">
             <span className="tag">v0.1 – prototype</span>
@@ -824,9 +872,7 @@ useEffect(() => {
                 <div key={item.id} className="chip">
                   <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
                   {item.expiration_date && (
-                    <span className="chip-meta">
-                      {new Date(item.expiration_date).toLocaleDateString()}
-                    </span>
+                    <span className="chip-meta">{new Date(item.expiration_date).toLocaleDateString()}</span>
                   )}
                 </div>
               ))}
@@ -835,12 +881,9 @@ useEffect(() => {
         )}
 
         <section className="inventory-grid">
-          {/* Formulaire */}
           <div className="card">
             <h2 className="section-title">Ajouter un produit</h2>
-            <p className="section-subtitle">
-              Renseigne ce que tu viens de ranger dans tes placards, ton frigo ou ton congélateur.
-            </p>
+            <p className="section-subtitle">Renseigne ce que tu viens de ranger dans tes placards.</p>
 
             <form className="form-grid" onSubmit={handleAdd}>
               <div className="field-group full">
@@ -855,10 +898,7 @@ useEffect(() => {
 
               <div className="field-group">
                 <label className="field-label">
-                  Code-barres{' '}
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                    (optionnel)
-                  </span>
+                  Code-barres <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>(optionnel)</span>
                 </label>
                 <div className="field-row">
                   <input
@@ -867,11 +907,7 @@ useEffect(() => {
                     className="field-input"
                     placeholder="Ex : 3017624010701"
                   />
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => setShowScanner(true)}
-                  >
+                  <button type="button" className="btn-secondary" onClick={() => setShowScanner(true)}>
                     📷 Scanner
                   </button>
                 </div>
@@ -891,9 +927,7 @@ useEffect(() => {
                 <label className="field-label">Catégorie principale</label>
                 <select
                   value={category}
-                  onChange={(e) =>
-                    setCategory(e.target.value as MainCategory | '')
-                  }
+                  onChange={(e) => setCategory(e.target.value as MainCategory | '')}
                   className="field-input"
                 >
                   <option value="">Choisir une catégorie...</option>
@@ -961,7 +995,6 @@ useEffect(() => {
             </form>
           </div>
 
-          {/* Inventaire groupé par catégories, avec case "aliment principal" */}
           <div className="card">
             <h2 className="section-title">Inventaire détaillé par catégorie</h2>
 
@@ -998,10 +1031,7 @@ useEffect(() => {
                         <tbody>
                           {items.map((item) => {
                             const expDate = item.expiration_date;
-                            const exp = expDate
-                              ? new Date(expDate).toLocaleDateString()
-                              : '-';
-
+                            const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
                             const status = getExpirationStatus(expDate, settings.soonDays);
                             const labelStatus = getExpirationLabel(status);
 
@@ -1009,14 +1039,8 @@ useEffect(() => {
                               <tr key={item.id}>
                                 <td>
                                   <div className="product-cell">
-                                    <span className="product-name">
-                                      {item.product?.name ?? 'Produit'}
-                                    </span>
-                                    {item.product?.brand && (
-                                      <span className="product-brand">
-                                        {item.product.brand}
-                                      </span>
-                                    )}
+                                    <span className="product-name">{item.product?.name ?? 'Produit'}</span>
+                                    {item.product?.brand && <span className="product-brand">{item.product.brand}</span>}
                                   </div>
                                 </td>
                                 <td>
@@ -1024,12 +1048,7 @@ useEffect(() => {
                                     <input
                                       type="checkbox"
                                       checked={item.product.is_main}
-                                      onChange={() =>
-                                        handleToggleMain(
-                                          item.product!.id,
-                                          item.product!.is_main,
-                                        )
-                                      }
+                                      onChange={() => handleToggleMain(item.product!.id, item.product!.is_main)}
                                     />
                                   ) : (
                                     '-'
@@ -1041,9 +1060,7 @@ useEffect(() => {
                                 </td>
                                 <td>{exp}</td>
                                 <td>
-                                  <span
-                                    className={`status-pill status-${status}`}
-                                  >
+                                  <span className={`status-pill status-${status}`}>
                                     <span className="status-dot" />
                                     {labelStatus}
                                   </span>
@@ -1069,9 +1086,7 @@ useEffect(() => {
       <div className="main-header">
         <div>
           <h1 className="main-title">Tableau de bord</h1>
-          <p className="main-subtitle">
-            Vue d’ensemble de tes stocks et de ce qu’il faut surveiller.
-          </p>
+          <p className="main-subtitle">Vue d’ensemble de tes stocks et de ce qu’il faut surveiller.</p>
         </div>
         <div className="main-header-right">
           <span className="tag">Aperçu global</span>
@@ -1087,7 +1102,7 @@ useEffect(() => {
         <div className="stat-card">
           <div className="stat-label">À consommer bientôt</div>
           <div className="stat-value accent">{soonItems}</div>
-          <div className="stat-foot">Sur les 7 prochains jours</div>
+          <div className="stat-foot">Sur les {settings.soonDays} prochains jours</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Périmés</div>
@@ -1095,93 +1110,42 @@ useEffect(() => {
           <div className="stat-foot">À vérifier rapidement</div>
         </div>
       </section>
-
-      <section className="card card-soft">
-        <h2 className="section-title">Focus produits sensibles</h2>
-        {criticalItems.length === 0 ? (
-          <p className="muted">
-            Rien à signaler pour l’instant, tu es à jour sur tes stocks ✅
-          </p>
-        ) : (
-          <>
-            <p className="section-subtitle">
-              Voici les produits à utiliser en priorité dans tes prochains repas :
-            </p>
-            <div className="chips-row">
-              {criticalItems.map((item) => {
-                const status = getExpirationStatus(item.expiration_date, settings.soonDays);
-                const label = getExpirationLabel(status);
-                return (
-                  <div key={item.id} className="chip">
-                    <span className="chip-title">
-                      {item.product?.name ?? 'Produit'}
-                    </span>
-                    <span className="chip-meta">
-                      {label}
-                      {item.expiration_date &&
-                        ` · ${new Date(
-                          item.expiration_date,
-                        ).toLocaleDateString()}`}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </section>
     </>
   );
 
   const renderShoppingTab = () => {
-    // Produits actuellement présents (quantité > 0)
     const presentProductIds = new Set(
       stocks
         .filter((s) => (s.quantity ?? 0) > 0 && s.product?.id)
         .map((s) => s.product!.id),
     );
 
-    const missingMain = products.filter(
-      (p) => p.is_main && !presentProductIds.has(p.id),
-    );
-    const missingOthers = products.filter(
-      (p) => !p.is_main && !presentProductIds.has(p.id),
-    );
+    const missingMain = products.filter((p) => p.is_main && !presentProductIds.has(p.id));
+    const missingOthers = products.filter((p) => !p.is_main && !presentProductIds.has(p.id));
 
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
-    const title =
-      shoppingSubTab === 'main'
-        ? 'Aliments principaux manquants'
-        : 'Autres aliments manquants';
+
+    const title = shoppingSubTab === 'main' ? 'Aliments principaux manquants' : 'Autres aliments manquants';
     const subtitle =
       shoppingSubTab === 'main'
-        ? 'Les aliments que tu as marqués comme importants mais que tu n’as plus en stock.'
-        : 'Les aliments que tu as déjà utilisés par le passé, mais qui ne sont plus en stock.';
+        ? 'Les aliments marqués comme importants mais absents de tes stocks.'
+        : 'Les aliments connus mais absents de tes stocks.';
 
-    // Regroupement par grande catégorie
     const grouped: { [key: string]: Product[] } = {};
     for (const p of currentList) {
-      const cat =
-        (p.category && MAIN_CATEGORIES.includes(p.category as MainCategory)
-          ? p.category
-          : 'Autres') || 'Autres';
+      const cat = (p.category && MAIN_CATEGORIES.includes(p.category as MainCategory) ? p.category : 'Autres') || 'Autres';
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(p);
     }
 
-    const categoryOrder: (string | MainCategory)[] = [
-      ...MAIN_CATEGORIES,
-      'Autres',
-    ];
+    const categoryOrder: (string | MainCategory)[] = [...MAIN_CATEGORIES, 'Autres'];
 
     return (
       <>
         <div className="main-header">
           <div>
             <h1 className="main-title">Listes de courses</h1>
-            <p className="main-subtitle">
-              Génère automatiquement ta liste de courses en fonction de ce qui manque dans tes placards.
-            </p>
+            <p className="main-subtitle">Ta liste auto en fonction de ce qui manque dans tes placards.</p>
           </div>
           <div className="main-header-right">
             <span className="tag">Basée sur ton stock</span>
@@ -1192,20 +1156,14 @@ useEffect(() => {
           <div className="subtabs">
             <button
               type="button"
-              className={
-                'subtab-btn' +
-                (shoppingSubTab === 'main' ? ' subtab-btn--active' : '')
-              }
+              className={'subtab-btn' + (shoppingSubTab === 'main' ? ' subtab-btn--active' : '')}
               onClick={() => setShoppingSubTab('main')}
             >
               ⭐ Aliments principaux
             </button>
             <button
               type="button"
-              className={
-                'subtab-btn' +
-                (shoppingSubTab === 'others' ? ' subtab-btn--active' : '')
-              }
+              className={'subtab-btn' + (shoppingSubTab === 'others' ? ' subtab-btn--active' : '')}
               onClick={() => setShoppingSubTab('others')}
             >
               Autres aliments
@@ -1216,13 +1174,11 @@ useEffect(() => {
             {title}
           </h2>
           <p className="section-subtitle">{subtitle}</p>
+
           {info && <p className="info-text">{info}</p>}
 
-
           {currentList.length === 0 ? (
-            <p className="muted">
-              Pour cette section, tout est à jour : rien à ajouter à ta liste de courses ✅
-            </p>
+            <p className="muted">Tout est à jour ✅</p>
           ) : (
             categoryOrder.map((cat) => {
               const items = grouped[cat];
@@ -1234,11 +1190,7 @@ useEffect(() => {
                     {items.map((p) => (
                       <li key={p.id} className="shopping-list-item">
                         <span className="shopping-product-name">{p.name}</span>
-                        {p.brand && (
-                          <span className="shopping-product-brand">
-                            {p.brand}
-                          </span>
-                        )}
+                        {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
                       </li>
                     ))}
                   </ul>
@@ -1251,133 +1203,12 @@ useEffect(() => {
     );
   };
 
-  const recipeKindToCategory = (kind: 'savory' | 'sweet') =>
-  kind === 'sweet' ? 'Produit sucré' : 'Produit salé';
-
-const findExistingProductForKeyword = (keyword: string) => {
-  const key = normalizeText(keyword);
-  return products.find((p) => {
-    const pn = normalizeText(p.name);
-    // match "oeuf" avec "oeufs", "pates" avec "pâtes", etc.
-    return pn === key || pn.includes(key) || key.includes(pn);
-  });
-};
-
-const ensureProductExistsForShopping = async (
-  keyword: string,
-  kind: 'savory' | 'sweet',
-) => {
-  // 1) On regarde d'abord dans l'état local
-  const local = findExistingProductForKeyword(keyword);
-  if (local) return { product: local, created: false };
-
-  // 2) Sinon on vérifie côté Supabase (au cas où)
-  const { data: existing, error: existingError } = await supabase
-    .from('products')
-    .select('id, name, brand, category, default_unit, barcode, is_main')
-    .ilike('name', `%${keyword}%`)
-    .limit(1);
-
-  if (existingError) throw existingError;
-
-  if (existing && existing.length > 0) {
-    const p = existing[0] as any;
-    const normalized = {
-      id: p.id,
-      name: p.name,
-      brand: p.brand,
-      category: p.category,
-      default_unit: p.default_unit,
-      barcode: p.barcode ?? null,
-      is_main: !!p.is_main,
-    };
-    // sync state
-    setProducts((prev) => {
-      const idx = prev.findIndex((x) => x.id === normalized.id);
-      if (idx === -1) return [...prev, normalized];
-      const copy = [...prev];
-      copy[idx] = normalized;
-      return copy;
-    });
-    return { product: normalized, created: false };
-  }
-
-  // 3) On crée un "produit" minimal (dans la bonne grande catégorie)
-  const category = recipeKindToCategory(kind);
-
-  const { data: created, error: createError } = await supabase
-    .from('products')
-    .insert({
-      name: keyword,            // volontairement simple
-      brand: null,
-      category,                 // sucré/salé
-      default_unit: null,
-      barcode: null,
-      is_main: false,
-    })
-    .select('id, name, brand, category, default_unit, barcode, is_main')
-    .single();
-
-  if (createError || !created) throw createError || new Error('Erreur création produit');
-
-  const normalized = {
-    id: (created as any).id,
-    name: (created as any).name,
-    brand: (created as any).brand,
-    category: (created as any).category,
-    default_unit: (created as any).default_unit,
-    barcode: (created as any).barcode ?? null,
-    is_main: !!(created as any).is_main,
-  };
-
-  setProducts((prev) => [...prev, normalized]);
-  return { product: normalized, created: true };
-};
-
-const addMissingIngredientsToShopping = async (
-  missing: string[],
-  kind: 'savory' | 'sweet',
-) => {
-  if (!missing || missing.length === 0) return;
-
-  setError(null);
-  setInfo(null);
-
-  try {
-    let createdCount = 0;
-
-    // On traite en série pour simplifier (tu peux paralléliser plus tard)
-    for (const ing of missing) {
-      const trimmed = ing.trim();
-      if (!trimmed) continue;
-
-      const { created } = await ensureProductExistsForShopping(trimmed, kind);
-      if (created) createdCount += 1;
-    }
-
-    // Petit bonus UX : on bascule direct sur la liste de courses
-    setActiveTab('shopping');
-    setShoppingSubTab('others');
-
-    setInfo(
-      createdCount === 0
-        ? '✅ Ingrédients déjà présents dans tes produits connus. Va voir ta liste de courses.'
-        : `✅ Ajouté ${createdCount} ingrédient(s) à ta liste de courses.`,
-    );
-  } catch (e) {
-    console.error(e);
-    setError("Erreur lors de l'ajout des ingrédients à la liste de courses.");
-  }
-};
-  const renderSettingsTab = () => {
-  return (
+  const renderSettingsTab = () => (
     <>
       <div className="main-header">
         <div>
           <h1 className="main-title">Réglages</h1>
-          <p className="main-subtitle">
-            Personnalise les seuils d’alerte, les règles recettes et les valeurs par défaut.
-          </p>
+          <p className="main-subtitle">Personnalise les seuils d’alerte, règles recettes et valeurs par défaut.</p>
         </div>
         <div className="main-header-right">
           <span className="tag">Sauvegarde locale</span>
@@ -1386,9 +1217,7 @@ const addMissingIngredientsToShopping = async (
 
       <section className="card">
         <h2 className="section-title">Péremption</h2>
-        <p className="section-subtitle">
-          Définis à partir de combien de jours un produit est considéré “à consommer bientôt”.
-        </p>
+        <p className="section-subtitle">À partir de combien de jours : “à consommer bientôt”.</p>
 
         <div className="form-grid">
           <div className="field-group">
@@ -1400,10 +1229,7 @@ const addMissingIngredientsToShopping = async (
               value={settings.soonDays}
               onChange={(e) => {
                 const v = Number(e.target.value);
-                setSettings((prev) => ({
-                  ...prev,
-                  soonDays: Number.isFinite(v) ? v : prev.soonDays,
-                }));
+                setSettings((prev) => ({ ...prev, soonDays: Number.isFinite(v) ? v : prev.soonDays }));
                 setSettingsInfo(null);
               }}
               className="field-input"
@@ -1414,9 +1240,7 @@ const addMissingIngredientsToShopping = async (
 
       <section className="card" style={{ marginTop: '0.9rem' }}>
         <h2 className="section-title">Recettes</h2>
-        <p className="section-subtitle">
-          Contrôle la règle “recette faisable si ≤ X ingrédients manquants”.
-        </p>
+        <p className="section-subtitle">Recette “faisable” si ≤ X ingrédients manquants.</p>
 
         <div className="form-grid">
           <div className="field-group">
@@ -1430,9 +1254,7 @@ const addMissingIngredientsToShopping = async (
                 const v = Number(e.target.value);
                 setSettings((prev) => ({
                   ...prev,
-                  recipesMaxMissing: Number.isFinite(v)
-                    ? v
-                    : prev.recipesMaxMissing,
+                  recipesMaxMissing: Number.isFinite(v) ? v : prev.recipesMaxMissing,
                 }));
                 setSettingsInfo(null);
               }}
@@ -1444,9 +1266,7 @@ const addMissingIngredientsToShopping = async (
 
       <section className="card" style={{ marginTop: '0.9rem' }}>
         <h2 className="section-title">Placards</h2>
-        <p className="section-subtitle">
-          Valeurs par défaut utilisées lors de l’ajout d’un produit.
-        </p>
+        <p className="section-subtitle">Valeurs par défaut lors de l’ajout d’un produit.</p>
 
         <div className="form-grid">
           <div className="field-group full">
@@ -1454,10 +1274,7 @@ const addMissingIngredientsToShopping = async (
             <input
               value={settings.defaultPlace}
               onChange={(e) => {
-                setSettings((prev) => ({
-                  ...prev,
-                  defaultPlace: e.target.value,
-                }));
+                setSettings((prev) => ({ ...prev, defaultPlace: e.target.value }));
                 setSettingsInfo(null);
               }}
               className="field-input"
@@ -1467,11 +1284,7 @@ const addMissingIngredientsToShopping = async (
         </div>
 
         <div className="form-actions">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => setSettingsInfo('✅ Réglages enregistrés.')}
-          >
+          <button type="button" className="btn-primary" onClick={() => setSettingsInfo('✅ Réglages enregistrés.')}>
             Enregistrer
           </button>
         </div>
@@ -1480,181 +1293,224 @@ const addMissingIngredientsToShopping = async (
       </section>
     </>
   );
-};
 
   const renderRecipesTab = () => {
-  const normalize = (s: string) =>
-    s
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
+    if (recipesLoading) {
+      return (
+        <>
+          <div className="main-header">
+            <div>
+              <h1 className="main-title">Recettes</h1>
+              <p className="main-subtitle">Chargement des recettes…</p>
+            </div>
+          </div>
+          <section className="card">
+            <p className="muted">Chargement…</p>
+          </section>
+        </>
+      );
+    }
 
-  const stockNames = stocks
-    .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
-    .map((s) => normalize(s.product!.name));
+    const normalize = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-  const hasIngredient = (ingredient: string) => {
-    const key = normalize(ingredient);
-    return stockNames.some((n) => n.includes(key));
-  };
+    const stockNames = stocks
+      .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
+      .map((s) => normalize(s.product!.name));
 
-  const enriched = SAMPLE_RECIPES.map((r) => {
-    const missing = r.ingredients.filter((ing) => !hasIngredient(ing));
-    const available = r.ingredients.filter((ing) => hasIngredient(ing));
-    const missingCount = missing.length;
-    const feasible = missingCount <= settings.recipesMaxMissing;
+    const hasIngredient = (ingredient: string) => {
+      const key = normalize(ingredient);
+      return stockNames.some((n) => n.includes(key));
+    };
 
-    return { ...r, missing, available, missingCount, feasible };
-  });
+    // ✅ IMPORTANT : recettes DB + catalogue d'exemples
+    const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
 
-  const feasibleList = enriched
-    .filter((r) => r.feasible)
-    .sort((a, b) => a.missingCount - b.missingCount);
+    const enriched = allRecipes.map((r) => {
+      const missing = r.ingredients.filter((ing) => !hasIngredient(ing));
+      const missingCount = missing.length;
+      const feasible = missingCount <= settings.recipesMaxMissing;
+      return { ...r, missing, missingCount, feasible };
+    });
 
-  const allList = enriched;
-  const current = recipesSubTab === 'feasible' ? feasibleList : allList;
+    const feasibleList = enriched.filter((r) => r.feasible).sort((a, b) => a.missingCount - b.missingCount);
+    const current = recipesSubTab === 'feasible' ? feasibleList : enriched;
 
-  const savory = current.filter((r) => r.kind === 'savory');
-  const sweet = current.filter((r) => r.kind === 'sweet');
+    const savory = current.filter((r) => r.kind === 'savory');
+    const sweet = current.filter((r) => r.kind === 'sweet');
 
-  const headerTitle =
-  recipesSubTab === 'feasible'
-    ? `Recettes faisables (≤ ${settings.recipesMaxMissing} ingrédients manquants)`
-    : 'Recettes en général';
+    const headerTitle =
+      recipesSubTab === 'feasible'
+        ? `Recettes faisables (≤ ${settings.recipesMaxMissing} ingrédients manquants)`
+        : 'Recettes en général';
 
+    const headerSubtitle =
+      recipesSubTab === 'feasible'
+        ? `Basé sur ton stock actuel. On accepte jusqu’à ${settings.recipesMaxMissing} ingrédients manquants.`
+        : 'Catalogue de recettes (exemples) séparées en sucré / salé.';
 
-  const headerSubtitle =
-    recipesSubTab === 'feasible'
-      ? 'Basé sur ton stock actuel. On accepte jusqu’à ${settings.recipesMaxMissing} ingrédients manquants.'
-      : 'Catalogue de recettes (exemples) séparées en sucré / salé.';
+    const renderRecipeCard = (r: any) => {
+      const badge = `🧾 ${r.missingCount} manquant(s)`;
+      const isDbRecipe = dbRecipes.some((x) => x.id === r.id); // permet d'afficher "supprimer" seulement sur DB
 
-  const renderRecipeCard = (r: any) => {
-    const badge = `🧾 ${r.missingCount} manquant(s)`;
+      return (
+        <div key={r.id} className="recipe-card">
+          <div className="recipe-head">
+            <h3 className="recipe-title">{r.name}</h3>
 
-    return (
-      <div key={r.id} className="recipe-card">
-        <div className="recipe-head">
-          <h3 className="recipe-title">{r.name}</h3>
-          {recipesSubTab === 'feasible' && (
-            <span className="recipe-badge">{badge}</span>
-          )}
-        </div>
+            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+              {recipesSubTab === 'feasible' && <span className="recipe-badge">{badge}</span>}
 
-        <p className="recipe-subtitle">Ingrédients :</p>
-        <ul className="recipe-list">
-          {r.ingredients.map((ing: string) => {
-            const ok = hasIngredient(ing);
-            return (
-              <li
-                key={ing}
-                className={ok ? 'ing-ok' : 'ing-missing'}
-                title={ok ? 'Disponible' : 'Manquant'}
-              >
-                {ok ? '✅ ' : '❌ '}
-                {ing}
-              </li>
-            );
-          })}
-        </ul>
+              {isDbRecipe && (
+                <button
+                  type="button"
+                  className="recipe-delete-btn"
+                  onClick={() => void deleteRecipeInDb(r.id)}
+                  title="Supprimer cette recette"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+          </div>
 
-        {recipesSubTab === 'feasible' && r.missingCount > 0 && (
-          <>
-            <p className="recipe-subtitle">Manque :</p>
-            <ul className="recipe-list">
-              {r.missing.map((ing: string) => (
-                <li key={ing}>{ing}</li>
-              ))}
-            </ul>
+          <p className="recipe-subtitle">Ingrédients :</p>
+          <ul className="recipe-list">
+            {r.ingredients.map((ing: string) => {
+              const ok = hasIngredient(ing);
+              return (
+                <li key={ing} className={ok ? 'ing-ok' : 'ing-missing'} title={ok ? 'Disponible' : 'Manquant'}>
+                  {ok ? '✅ ' : '❌ '}
+                  {ing}
+                </li>
+              );
+            })}
+          </ul>
 
-            {/* ✅ Bouton : ajoute les ingrédients manquants à la liste de courses */}
+          {recipesSubTab === 'feasible' && r.missingCount > 0 && (
             <div className="recipe-actions">
               <button
                 type="button"
                 className="recipe-add-btn"
-                onClick={() =>
-                  void addMissingIngredientsToShopping(r.missing, r.kind)
-                }
+                onClick={() => void addMissingIngredientsToShopping(r.missing, r.kind)}
               >
                 ➕ Ajouter les ingrédients manquants à la liste de courses
               </button>
             </div>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <>
+        <div className="main-header">
+          <div>
+            <h1 className="main-title">Recettes</h1>
+            <p className="main-subtitle">{headerSubtitle}</p>
+          </div>
+          <div className="main-header-right">
+            <span className="tag">Prototype</span>
+          </div>
+        </div>
+
+        {/* ✅ Formulaire : Ajouter une recette (DB) */}
+        <section className="card" style={{ marginBottom: '0.9rem' }}>
+          <h2 className="section-title">Ajouter une recette</h2>
+          <p className="section-subtitle">Sépare les ingrédients par des virgules (ex : oeuf, farine, lait).</p>
+
+          <div className="form-grid">
+            <div className="field-group full">
+              <label className="field-label">Nom</label>
+              <input
+                className="field-input"
+                placeholder="Ex : Gratin de pâtes"
+                value={newRecipeName}
+                onChange={(e) => setNewRecipeName(e.target.value)}
+              />
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">Type</label>
+              <select
+                className="field-input"
+                value={newRecipeKind}
+                onChange={(e) => setNewRecipeKind(e.target.value as RecipeKind)}
+              >
+                <option value="savory">Salé</option>
+                <option value="sweet">Sucré</option>
+              </select>
+            </div>
+
+            <div className="field-group full">
+              <label className="field-label">Ingrédients (virgules)</label>
+              <input
+                className="field-input"
+                placeholder="oeuf, fromage, huile..."
+                value={newRecipeIngredients}
+                onChange={(e) => setNewRecipeIngredients(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-actions">
+            <button type="button" className="btn-primary" onClick={() => void createRecipeInDb()}>
+              Ajouter la recette
+            </button>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="subtabs">
+            <button
+              type="button"
+              className={'subtab-btn' + (recipesSubTab === 'feasible' ? ' subtab-btn--active' : '')}
+              onClick={() => setRecipesSubTab('feasible')}
+            >
+              ✅ Faisables
+            </button>
+            <button
+              type="button"
+              className={'subtab-btn' + (recipesSubTab === 'all' ? ' subtab-btn--active' : '')}
+              onClick={() => setRecipesSubTab('all')}
+            >
+              📚 Toutes
+            </button>
+          </div>
+
+          <h2 className="section-title" style={{ marginTop: '0.7rem' }}>
+            {headerTitle}
+          </h2>
+
+          <div className="recipe-section">
+            <h3 className="recipe-section-title">🥘 Salé</h3>
+            {savory.length === 0 ? (
+              <p className="muted">
+                {recipesSubTab === 'feasible'
+                  ? `Aucune recette salée faisable avec ton stock (≤ ${settings.recipesMaxMissing} manquants).`
+                  : 'Aucune recette salée.'}
+              </p>
+            ) : (
+              <div className="recipe-grid">{savory.map(renderRecipeCard)}</div>
+            )}
+          </div>
+
+          <div className="recipe-section" style={{ marginTop: '1rem' }}>
+            <h3 className="recipe-section-title">🍰 Sucré</h3>
+            {sweet.length === 0 ? (
+              <p className="muted">
+                {recipesSubTab === 'feasible'
+                  ? `Aucune recette sucrée faisable avec ton stock (≤ ${settings.recipesMaxMissing} manquants).`
+                  : 'Aucune recette sucrée.'}
+              </p>
+            ) : (
+              <div className="recipe-grid">{sweet.map(renderRecipeCard)}</div>
+            )}
+          </div>
+        </section>
+      </>
     );
   };
-
-  return (
-    <>
-      <div className="main-header">
-        <div>
-          <h1 className="main-title">Recettes</h1>
-          <p className="main-subtitle">{headerSubtitle}</p>
-        </div>
-        <div className="main-header-right">
-          <span className="tag">Prototype</span>
-        </div>
-      </div>
-
-      <section className="card">
-        <div className="subtabs">
-          <button
-            type="button"
-            className={
-              'subtab-btn' +
-              (recipesSubTab === 'feasible' ? ' subtab-btn--active' : '')
-            }
-            onClick={() => setRecipesSubTab('feasible')}
-          >
-            ✅ Faisables
-          </button>
-          <button
-            type="button"
-            className={
-              'subtab-btn' +
-              (recipesSubTab === 'all' ? ' subtab-btn--active' : '')
-            }
-            onClick={() => setRecipesSubTab('all')}
-          >
-            📚 Toutes
-          </button>
-        </div>
-
-        <h2 className="section-title" style={{ marginTop: '0.7rem' }}>
-          {headerTitle}
-        </h2>
-
-        {/* SALÉ */}
-        <div className="recipe-section">
-          <h3 className="recipe-section-title">🥘 Salé</h3>
-          {savory.length === 0 ? (
-            <p className="muted">
-              {recipesSubTab === 'feasible'
-                ? "Aucune recette salée faisable avec ton stock (≤ 2 manquants)."
-                : 'Aucune recette salée dans le catalogue (pour l’instant).'}
-            </p>
-          ) : (
-            <div className="recipe-grid">{savory.map(renderRecipeCard)}</div>
-          )}
-        </div>
-
-        {/* SUCRÉ */}
-        <div className="recipe-section" style={{ marginTop: '1rem' }}>
-          <h3 className="recipe-section-title">🍰 Sucré</h3>
-          {sweet.length === 0 ? (
-            <p className="muted">
-              {recipesSubTab === 'feasible'
-                ? "Aucune recette sucrée faisable avec ton stock (≤ 2 manquants)."
-                : 'Aucune recette sucrée dans le catalogue (pour l’instant).'}
-            </p>
-          ) : (
-            <div className="recipe-grid">{sweet.map(renderRecipeCard)}</div>
-          )}
-        </div>
-      </section>
-    </>
-  );
-};
 
   const renderPlaceholder = (title: string, description: string) => (
     <>
@@ -1671,13 +1527,7 @@ const addMissingIngredientsToShopping = async (
       <section className="card">
         <p className="muted">
           Cette section n’est pas encore développée, mais la structure est déjà prête.
-          On pourra y ajouter :
         </p>
-        <ul className="feature-list">
-          <li>des écrans dédiés,</li>
-          <li>des filtres intelligents,</li>
-          <li>et des automatisations (ajout auto dans les listes, idées repas, etc.).</li>
-        </ul>
       </section>
     </>
   );
@@ -1688,19 +1538,12 @@ const addMissingIngredientsToShopping = async (
   else if (activeTab === 'shopping') mainContent = renderShoppingTab();
   else if (activeTab === 'recipes') mainContent = renderRecipesTab();
   else if (activeTab === 'settings') mainContent = renderSettingsTab();
-  else
-    mainContent = renderPlaceholder(
-      'Réglages & préférences',
-      'Personnalise les seuils d’alerte, les lieux de stockage et plus encore.',
-    );
+  else mainContent = renderPlaceholder('Section', 'À venir');
 
   return (
     <div className="app-root">
       {showScanner && (
-        <BarcodeScanner
-          onDetected={handleBarcodeDetected}
-          onClose={() => setShowScanner(false)}
-        />
+        <BarcodeScanner onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />
       )}
 
       <div className="app-shell">
@@ -1718,10 +1561,7 @@ const addMissingIngredientsToShopping = async (
               <button
                 key={item.key}
                 type="button"
-                className={
-                  'sidebar-item' +
-                  (activeTab === item.key ? ' sidebar-item--active' : '')
-                }
+                className={'sidebar-item' + (activeTab === item.key ? ' sidebar-item--active' : '')}
                 onClick={() => setActiveTab(item.key)}
               >
                 <span className="sidebar-item-icon">{item.icon}</span>
@@ -1734,8 +1574,7 @@ const addMissingIngredientsToShopping = async (
             <div className="sidebar-footer-box">
               <div className="sidebar-footer-title">Roadmap</div>
               <div className="sidebar-footer-text">
-                À venir : listes de courses intelligentes, suggestions de recettes, partage
-                de foyer…
+                À venir : suggestions de recettes, partage de foyer…
               </div>
             </div>
           </div>

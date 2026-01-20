@@ -921,3 +921,23 @@ body {
   text-decoration: line-through;
   opacity: 0.55;
 }
+.recipe-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.recipe-delete-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  border-radius: 0.5rem;
+  color: #991b1b;
+}
+
+.recipe-delete-btn:hover {
+  background: rgba(220, 38, 38, 0.12);
+}
