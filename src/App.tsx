@@ -275,7 +275,7 @@ function App() {
   const [editBarcode, setEditBarcode] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
-  const [subCategory, setSubCategory] = useState<SubCategory | ''>('');
+  const [editSubCategory, setEditSubCategory] = useState<SubCategory | ''>('');
   // ---------- Settings localStorage ----------
   useEffect(() => {
     try {
@@ -314,6 +314,7 @@ function App() {
         setEditName(item.product?.name ?? '');
         setEditBrand(item.product?.brand ?? '');
         setEditCategory((item.product?.category as MainCategory) ?? '');
+        setEditSubCategory((item.product?.sub_category as SubCategory) ?? '');
         setEditPlace(item.place ?? '');
         setEditQty(String(item.quantity ?? 0));
         setEditUnit(item.unit ?? 'unité');
@@ -342,6 +343,10 @@ function App() {
         name: editName.trim(),
         brand: editBrand.trim() || null,
         category: editCategory ? editCategory : null,
+        sub_category:
+          editCategory === 'Produit sucré' || editCategory === 'Produit salé'
+            ? (editSubCategory || null)
+            : null,
         barcode: editBarcode.trim() || null,
       })
       .eq('id', productId);
@@ -379,6 +384,10 @@ function App() {
                     name: editName.trim(),
                     brand: editBrand.trim() || null,
                     category: editCategory ? editCategory : null,
+                    sub_category:
+                      editCategory === 'Produit sucré' || editCategory === 'Produit salé'
+                        ? (editSubCategory || null)
+                        : null,
                     barcode: editBarcode.trim() || null,
                   }
                 : null,
@@ -412,7 +421,7 @@ function App() {
 };
 useEffect(() => {
   if (category !== 'Produit sucré' && category !== 'Produit salé') {
-    setSubCategory('');
+    setEditSubCategory('');
   }
 }, [category]);
 
@@ -739,7 +748,7 @@ useEffect(() => {
           category: category ? category : null,
           sub_category:
             category === 'Produit sucré' || category === 'Produit salé'
-              ? (subCategory || null)
+              ? (editSubCategory || null)
               : null,
           default_unit: unit.trim() || null,
           barcode: trimmedBarcode || null,
@@ -871,7 +880,7 @@ useEffect(() => {
     setName('');
     setBrand('');
     setCategory('');
-    setSubCategory('');
+    setEditSubCategory('');
     setQuantity('1');
     setUnit('unité');
     setExpiration('');
@@ -1351,8 +1360,8 @@ const renderStockTab = () => {
               <label className="field-label">Sous-catégorie</label>
               <select
                 className="field-input"
-                value={subCategory}
-                onChange={(e) => setSubCategory(e.target.value as SubCategory | '')}
+                value={editSubCategory}
+                onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
               >
                 <option value="">(Aucune)</option>
                 {SUB_CATEGORIES.map((sc) => (
@@ -1892,6 +1901,23 @@ const renderStockTab = () => {
           <label className="field-label">Lieu</label>
           <input className="field-input" value={editPlace} onChange={(e) => setEditPlace(e.target.value)} />
         </div>
+        {(editCategory === 'Produit sucré' || editCategory === 'Produit salé') && (
+  <div className="field-group">
+    <label className="field-label">Sous-catégorie</label>
+    <select
+      className="field-input"
+      value={editSubCategory}
+      onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
+    >
+      <option value="">(Aucune)</option>
+      {SUB_CATEGORIES.map((sc) => (
+        <option key={sc} value={sc}>
+          {sc}
+        </option>
+      ))}
+    </select>
+  </div>
+)}
 
         <div className="field-group">
           <label className="field-label">Quantité</label>
