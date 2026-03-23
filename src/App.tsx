@@ -4,7 +4,7 @@ import { supabase } from './supabaseClient';
 import { BarcodeScanner } from './BarcodeScanner';
 import './App.css';
 
-type Tab = 'dashboard' | 'stock' | 'shopping' | 'recipes' | 'settings';
+type Tab = 'dashboard' | 'stock' | 'history' | 'shopping' | 'recipes' | 'settings';
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
 
 const MAIN_CATEGORIES = [
@@ -39,6 +39,7 @@ type Product = {
   sub_category: string | null; 
   default_unit: string | null;
   barcode: string | null;
+  shopping_hidden: boolean;
   is_main: boolean;
 };
 
@@ -224,6 +225,7 @@ function roundQty(value: number, unit: string | null): number {
 const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
   { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
+  { key: 'history', label: 'Anciens achats', icon: '🕘' },
   { key: 'shopping', label: 'Listes de courses', icon: '🛒' },
   { key: 'recipes', label: 'Recettes', icon: '🍽️' },
   { key: 'settings', label: 'Réglages', icon: '⚙️' },
@@ -493,6 +495,7 @@ useEffect(() => {
             sub_category,
             default_unit,
             barcode,
+            shopping_hidden,
             is_main
           )
         `,
@@ -522,6 +525,7 @@ useEffect(() => {
                   sub_category: product.sub_category ?? null,
                   default_unit: product.default_unit,
                   barcode: product.barcode ?? null,
+                  shopping_hidden: !!product.shopping_hidden,
                   is_main: !!product.is_main,
                 }
               : null,
@@ -533,7 +537,7 @@ useEffect(() => {
 
       const { data: productsData, error: productsError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`);
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`);
 
       if (productsError) {
         console.error(productsError);
@@ -547,6 +551,7 @@ useEffect(() => {
           sub_category: p.sub_category ?? null,
           default_unit: p.default_unit,
           barcode: p.barcode ?? null,
+          shopping_hidden: !!p.shopping_hidden,
           is_main: !!p.is_main,
         }));
         setProducts(normalizedProducts);
@@ -676,7 +681,7 @@ useEffect(() => {
         .from('products')
         .update({ is_main: !currentValue })
         .eq('id', productId)
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
         .single();
 
       if (error || !data) throw error || new Error('Erreur mise à jour produit');
@@ -689,6 +694,7 @@ useEffect(() => {
         sub_category: data.sub_category ?? null,
         default_unit: data.default_unit,
         barcode: data.barcode ?? null,
+        shopping_hidden: !!data.shopping_hidden,
         is_main: !!data.is_main,
       };
 
@@ -713,6 +719,28 @@ useEffect(() => {
     }
   };
 
+const unhideFromShopping = async (productId: string) => {
+  const { error } = await supabase
+    .from('products')
+    .update({ shopping_hidden: false })
+    .eq('id', productId);
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  // sync state local products
+  setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, shopping_hidden: false } : p)));
+
+  // sync state local stocks.product
+  setStocks((prev) =>
+    prev.map((s) =>
+      s.product?.id === productId ? { ...s, product: { ...s.product, shopping_hidden: false } } : s,
+    ),
+  );
+};
+
   // ---------- Add stock ----------
   const handleAdd = async (e: FormEvent) => {
   e.preventDefault();
@@ -731,7 +759,7 @@ useEffect(() => {
     if (trimmedBarcode) {
       const { data: existingProducts, error: existingProductError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
         .eq('barcode', trimmedBarcode)
         .limit(1);
 
@@ -754,7 +782,7 @@ useEffect(() => {
           barcode: trimmedBarcode || null,
           is_main: false,
         })
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
         .single();
 
       if (productError || !productData) throw productError || new Error('Erreur création produit');
@@ -769,6 +797,7 @@ useEffect(() => {
       sub_category: productRow.sub_category ?? null,
       default_unit: productRow.default_unit,
       barcode: productRow.barcode ?? null,
+      shopping_hidden: !!productRow.shopping_hidden,
       is_main: !!productRow.is_main,
     };
 
@@ -813,7 +842,7 @@ useEffect(() => {
           `
           id, place, quantity, unit, expiration_date,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode, is_main
+            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main
           )
         `,
         )
@@ -835,7 +864,7 @@ useEffect(() => {
           `
           id, place, quantity, unit, expiration_date,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode, is_main
+            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main
           )
         `,
         )
@@ -863,6 +892,7 @@ useEffect(() => {
             sub_category: product.sub_category ?? null,
             default_unit: product.default_unit,
             barcode: product.barcode ?? null,
+            shopping_hidden: !!product.shopping_hidden,
             is_main: !!product.is_main,
           }
         : null,
@@ -919,7 +949,7 @@ const { data: created, error: createError } = await supabase
     barcode: null,
     is_main: false,
   })
-  .select('id, name, brand, category, sub_category, default_unit, barcode, is_main')
+  .select('id, name, brand, category, sub_category, default_unit, barcode, shopping_hidden,is_main')
   .single();
 
 if (createError || !created) throw createError || new Error('Erreur création produit');
@@ -932,6 +962,7 @@ const normalized: Product = {
   sub_category: created.sub_category ?? null,   // ✅ obligatoire
   default_unit: created.default_unit,
   barcode: created.barcode ?? null,
+  shopping_hidden: !!created.shopping_hidden,
   is_main: !!created.is_main,
 };
 
@@ -972,22 +1003,21 @@ return { product: normalized, created: true };
     }
   };
 
+const inStock = stocks.filter((s) => (s.quantity ?? 0) > 0);
+const outOfStock = stocks.filter((s) => (s.quantity ?? 0) === 0);
+
   // ---------- Derived dashboard ----------
-  const totalItems = stocks.length;
-  const soonItems = stocks.filter(
-    (item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'soon',
-  ).length;
-  const expiredItems = stocks.filter(
-    (item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'expired',
-  ).length;
+const totalItems = inStock.length;
+const soonItems = inStock.filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'soon').length;
+const expiredItems = inStock.filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired').length;
 
-  const soonList = stocks
-    .filter((item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'soon')
-    .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
+const soonList = inStock
+  .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'soon')
+  .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
-  const expiredList = stocks
-    .filter((item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'expired')
-    .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
+const expiredList = inStock
+  .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired')
+  .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
   const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date'>>) => {
   setError(null);
@@ -1017,19 +1047,126 @@ const changeQuantity = async (item: StockItem, direction: 1 | -1) => {
   const current = item.quantity ?? 0;
   const step = stepForUnit(item.unit);
   const next = Math.max(0, roundQty(current + direction * step, item.unit));
+
   await updateStock(item.id, { quantity: next });
+
+  // ✅ si on atteint 0 : l’article doit aller dans "Anciens achats" ET réapparaitre dans shopping
+  if (next === 0 && item.product?.id) {
+    await unhideFromShopping(item.product.id);
+  }
 };
+
 
 const changeUnit = async (item: StockItem, newUnit: string) => {
   await updateStock(item.id, { unit: newUnit });
 };
 
+const renderHistoryTab = () => {
+  const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
+    label: cat,
+    items: outOfStock.filter((s) => s.product?.category === cat),
+  }));
+
+  return (
+    <>
+      <div className="main-header">
+        <div>
+          <h1 className="main-title">Anciens achats</h1>
+          <p className="main-subtitle">
+            Produits tombés à 0. Augmente la quantité pour les remettre au placard.
+          </p>
+        </div>
+        <div className="main-header-right">
+          <span className="tag">Historique</span>
+        </div>
+      </div>
+
+      <section className="category-grid">
+        {groupedByCategory.map(({ label, items }) => (
+          <section key={label} className="card">
+            <div className="category-head">
+              <h2 className="section-title" style={{ margin: 0 }}>{label}</h2>
+              <span className="category-count">{items.length}</span>
+            </div>
+
+            {items.length === 0 ? (
+              <p className="muted" style={{ marginTop: '0.5rem' }}>Aucun élément.</p>
+            ) : (
+              <div className="table-wrapper" style={{ maxHeight: 360 }}>
+                <table className="stock-table">
+                  <thead>
+                    <tr>
+                      <th>Produit</th>
+                      <th>Lieu</th>
+                      <th>Quantité</th>
+                      <th>Unité</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.product?.name ?? 'Produit'}</td>
+                        <td>{item.place || '-'}</td>
+
+                        <td>
+                          <div className="qty-controls">
+                            <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, -1)}>−</button>
+                            <span className="qty-value">{item.quantity ?? 0}</span>
+                            <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, +1)}>+</button>
+                          </div>
+                        </td>
+
+                        <td>
+                          <select
+                            className="unit-select"
+                            value={item.unit ?? 'unité'}
+                            onChange={(e) => void changeUnit(item, e.target.value)}
+                          >
+                            {UNIT_OPTIONS.map((u) => (
+                              <option key={u.value} value={u.value}>{u.label}</option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td>
+                          <button type="button" className="btn-tertiary" onClick={() => openEdit(item)}>✏️</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        ))}
+      </section>
+    </>
+  );
+};
+
+const hideFromShopping = async (productId: string) => {
+  const { error } = await supabase
+    .from('products')
+    .update({ shopping_hidden: true })
+    .eq('id', productId);
+
+  if (error) {
+    console.error(error);
+    setError("Impossible de retirer l'aliment de la liste.");
+    return;
+  }
+
+  setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, shopping_hidden: true } : p)));
+  setInfo("✅ Aliment retiré de la liste de courses.");
+};
+
   // ---------- Tabs ----------
 const renderStockTab = () => {
   const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
-    label: cat,
-    items: stocks.filter((s) => s.product?.category === cat),
-  }));
+  label: cat,
+  items: inStock.filter((s) => s.product?.category === cat),
+}));
 
   const renderRowsTable = (rows: StockItem[]) => (
     <div className="table-wrapper" style={{ maxHeight: 360 }}>
@@ -1432,13 +1569,12 @@ const renderStockTab = () => {
 
   const renderShoppingTab = () => {
     const presentProductIds = new Set(
-      stocks
-        .filter((s) => (s.quantity ?? 0) > 0 && s.product?.id)
-        .map((s) => s.product!.id),
-    );
+  inStock.filter((s) => s.product?.id).map((s) => s.product!.id),
+);
 
-    const missingMain = products.filter((p) => p.is_main && !presentProductIds.has(p.id));
-    const missingOthers = products.filter((p) => !p.is_main && !presentProductIds.has(p.id));
+  const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+  const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+
 
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
 
@@ -1508,6 +1644,15 @@ const renderStockTab = () => {
                       <li key={p.id} className="shopping-list-item">
                         <span className="shopping-product-name">{p.name}</span>
                         {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
+                        <button
+                          type="button"
+                          className="btn-tertiary"
+                          onClick={() => void hideFromShopping(p.id)}
+                          title="Retirer de la liste"
+                        >
+                          🗑️
+                        </button>
+
                       </li>
                     ))}
                   </ul>
@@ -1855,6 +2000,7 @@ const renderStockTab = () => {
   else if (activeTab === 'shopping') mainContent = renderShoppingTab();
   else if (activeTab === 'recipes') mainContent = renderRecipesTab();
   else if (activeTab === 'settings') mainContent = renderSettingsTab();
+  else if (activeTab === 'history') mainContent = renderHistoryTab();
   else mainContent = renderPlaceholder('Section', 'À venir');
 
   return (
