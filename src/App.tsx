@@ -897,18 +897,20 @@ useEffect(() => {
     const local = findExistingProductForKeyword(keyword);
     if (local) return { product: local, created: false };
 
-    const { data: created, error: createError } = await supabase
+    const category = recipeKindToCategory(kind);
+
+const { data: created, error: createError } = await supabase
   .from('products')
   .insert({
     name: keyword,
     brand: null,
-    category,
-    sub_category: null,        // ✅ important : existe dans ton schéma
+    category,            // ✅ utilise kind indirectement
+    sub_category: null,
     default_unit: null,
     barcode: null,
     is_main: false,
   })
-  .select('id, name, brand, category, sub_category, default_unit, barcode, is_main') // ✅ récupère sub_category
+  .select('id, name, brand, category, sub_category, default_unit, barcode, is_main')
   .single();
 
 if (createError || !created) throw createError || new Error('Erreur création produit');
