@@ -17,11 +17,26 @@ const MAIN_CATEGORIES = [
 
 type MainCategory = (typeof MAIN_CATEGORIES)[number];
 
+const SUB_CATEGORIES = [
+  'Condiments',
+  'Fruits',
+  'Légumes',
+  'Boisson chaude',
+  'Boisson',
+  'Frais',
+  'Apéro',
+  'Conserve',
+  'Vrac',
+] as const;
+
+type SubCategory = (typeof SUB_CATEGORIES)[number];
+
 type Product = {
   id: string;
   name: string;
   brand: string | null;
   category: string | null;
+  sub_category: string | null; 
   default_unit: string | null;
   barcode: string | null;
   is_main: boolean;
@@ -260,6 +275,7 @@ function App() {
   const [editBarcode, setEditBarcode] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
+  const [subCategory, setSubCategory] = useState<SubCategory | ''>('');
   // ---------- Settings localStorage ----------
   useEffect(() => {
     try {
@@ -394,6 +410,11 @@ function App() {
     setEditSaving(false);
   }
 };
+useEffect(() => {
+  if (category !== 'Produit sucré' && category !== 'Produit salé') {
+    setSubCategory('');
+  }
+}, [category]);
 
   // ---------- OFF autofill ----------
   const autofillFromBarcode = async (code: string) => {
@@ -460,6 +481,7 @@ function App() {
             name,
             brand,
             category,
+            sub_category,
             default_unit,
             barcode,
             is_main
@@ -488,6 +510,7 @@ function App() {
                   name: product.name,
                   brand: product.brand,
                   category: product.category,
+                  sub_category: product.sub_category ?? null,
                   default_unit: product.default_unit,
                   barcode: product.barcode ?? null,
                   is_main: !!product.is_main,
@@ -501,7 +524,7 @@ function App() {
 
       const { data: productsData, error: productsError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,default_unit,barcode,is_main`);
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`);
 
       if (productsError) {
         console.error(productsError);
@@ -512,6 +535,7 @@ function App() {
           name: p.name,
           brand: p.brand,
           category: p.category,
+          sub_category: p.sub_category ?? null,
           default_unit: p.default_unit,
           barcode: p.barcode ?? null,
           is_main: !!p.is_main,
@@ -643,7 +667,7 @@ function App() {
         .from('products')
         .update({ is_main: !currentValue })
         .eq('id', productId)
-        .select(`id,name,brand,category,default_unit,barcode,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
         .single();
 
       if (error || !data) throw error || new Error('Erreur mise à jour produit');
@@ -653,6 +677,7 @@ function App() {
         name: data.name,
         brand: data.brand,
         category: data.category,
+        sub_category: data.sub_category ?? null,
         default_unit: data.default_unit,
         barcode: data.barcode ?? null,
         is_main: !!data.is_main,
@@ -681,169 +706,181 @@ function App() {
 
   // ---------- Add stock ----------
   const handleAdd = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
+  e.preventDefault();
+  setError(null);
 
-    if (!name.trim()) {
-      setError('Le nom du produit est obligatoire');
-      return;
+  if (!name.trim()) {
+    setError('Le nom du produit est obligatoire');
+    return;
+  }
+
+  try {
+    // 1) find/create product by barcode
+    let productRow: any | null = null;
+    const trimmedBarcode = barcode.trim();
+
+    if (trimmedBarcode) {
+      const { data: existingProducts, error: existingProductError } = await supabase
+        .from('products')
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
+        .eq('barcode', trimmedBarcode)
+        .limit(1);
+
+      if (existingProductError) throw existingProductError;
+      if (existingProducts && existingProducts.length > 0) productRow = existingProducts[0];
     }
 
-    try {
-      // 1) find/create product by barcode
-      let productRow: any | null = null;
-      const trimmedBarcode = barcode.trim();
+    if (!productRow) {
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .insert({
+          name: name.trim(),
+          brand: brand.trim() || null,
+          category: category ? category : null,
+          sub_category:
+            category === 'Produit sucré' || category === 'Produit salé'
+              ? (subCategory || null)
+              : null,
+          default_unit: unit.trim() || null,
+          barcode: trimmedBarcode || null,
+          is_main: false,
+        })
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,is_main`)
+        .single();
 
-      if (trimmedBarcode) {
-        const { data: existingProducts, error: existingProductError } = await supabase
-          .from('products')
-          .select(`id,name,brand,category,default_unit,barcode,is_main`)
-          .eq('barcode', trimmedBarcode)
-          .limit(1);
+      if (productError || !productData) throw productError || new Error('Erreur création produit');
+      productRow = productData;
+    }
 
-        if (existingProductError) throw existingProductError;
-        if (existingProducts && existingProducts.length > 0) productRow = existingProducts[0];
-      }
+    const normalizedProduct: Product = {
+      id: productRow.id,
+      name: productRow.name,
+      brand: productRow.brand,
+      category: productRow.category,
+      sub_category: productRow.sub_category ?? null,
+      default_unit: productRow.default_unit,
+      barcode: productRow.barcode ?? null,
+      is_main: !!productRow.is_main,
+    };
 
-      if (!productRow) {
-        const { data: productData, error: productError } = await supabase
-          .from('products')
-          .insert({
-            name: name.trim(),
-            brand: brand.trim() || null,
-            category: category ? category : null,
-            default_unit: unit.trim() || null,
-            barcode: trimmedBarcode || null,
-            is_main: false,
-          })
-          .select(`id,name,brand,category,default_unit,barcode,is_main`)
-          .single();
+    setProducts((prev) => {
+      const idx = prev.findIndex((p) => p.id === normalizedProduct.id);
+      if (idx === -1) return [...prev, normalizedProduct];
+      const copy = [...prev];
+      copy[idx] = normalizedProduct;
+      return copy;
+    });
 
-        if (productError || !productData) throw productError || new Error('Erreur création produit');
-        productRow = productData;
-      }
+    const productId = normalizedProduct.id;
+    const qtyToAdd = quantity ? Number(quantity) : 0;
+    const trimmedPlace = place.trim();
+    const trimmedUnit = unit.trim();
 
-      const normalizedProduct: Product = {
-        id: productRow.id,
-        name: productRow.name,
-        brand: productRow.brand,
-        category: productRow.category,
-        default_unit: productRow.default_unit,
-        barcode: productRow.barcode ?? null,
-        is_main: !!productRow.is_main,
-      };
+    // 2) merge same stock line
+    let stockQuery = supabase
+      .from('stocks')
+      .select(`id,place,quantity,unit,expiration_date`)
+      .eq('product_id', productId)
+      .eq('place', trimmedPlace)
+      .eq('unit', trimmedUnit);
 
-      setProducts((prev) => {
-        const idx = prev.findIndex((p) => p.id === normalizedProduct.id);
-        if (idx === -1) return [...prev, normalizedProduct];
-        const copy = [...prev];
-        copy[idx] = normalizedProduct;
-        return copy;
-      });
+    if (expiration) stockQuery = stockQuery.eq('expiration_date', expiration);
 
-      const productId = normalizedProduct.id;
-      const qtyToAdd = quantity ? Number(quantity) : 0;
-      const trimmedPlace = place.trim();
-      const trimmedUnit = unit.trim();
+    const { data: existingStocks, error: existingStocksError } = await stockQuery.limit(1);
+    if (existingStocksError) throw existingStocksError;
 
-      // 2) merge same stock line
-      let stockQuery = supabase
+    const existing = existingStocks && existingStocks[0];
+
+    let finalStockRow: any;
+
+    if (existing) {
+      const newQuantity = (existing.quantity ?? 0) + qtyToAdd;
+
+      const { data: updatedStock, error: updateError } = await supabase
         .from('stocks')
-        .select(`id,place,quantity,unit,expiration_date`)
-        .eq('product_id', productId)
-        .eq('place', trimmedPlace)
-        .eq('unit', trimmedUnit);
-
-      if (expiration) stockQuery = stockQuery.eq('expiration_date', expiration);
-
-      const { data: existingStocks, error: existingStocksError } = await stockQuery.limit(1);
-      if (existingStocksError) throw existingStocksError;
-
-      const existing = existingStocks && existingStocks[0];
-
-      let finalStockRow: any;
-
-      if (existing) {
-        const newQuantity = (existing.quantity ?? 0) + qtyToAdd;
-
-        const { data: updatedStock, error: updateError } = await supabase
-          .from('stocks')
-          .update({ quantity: newQuantity })
-          .eq('id', existing.id)
-          .select(
-            `
-            id, place, quantity, unit, expiration_date,
-            product:products ( id, name, brand, category, default_unit, barcode, is_main )
-          `,
+        .update({ quantity: newQuantity })
+        .eq('id', existing.id)
+        .select(
+          `
+          id, place, quantity, unit, expiration_date,
+          product:products (
+            id, name, brand, category, sub_category, default_unit, barcode, is_main
           )
-          .single();
+        `,
+        )
+        .single();
 
-        if (updateError || !updatedStock) throw updateError || new Error('Erreur mise à jour stock');
-        finalStockRow = updatedStock;
-      } else {
-        const { data: stockData, error: stockError } = await supabase
-          .from('stocks')
-          .insert({
-            product_id: productId,
-            place: trimmedPlace || null,
-            quantity: qtyToAdd,
-            unit: trimmedUnit || null,
-            expiration_date: expiration || null,
-          })
-          .select(
-            `
-            id, place, quantity, unit, expiration_date,
-            product:products ( id, name, brand, category, default_unit, barcode, is_main )
-          `,
+      if (updateError || !updatedStock) throw updateError || new Error('Erreur mise à jour stock');
+      finalStockRow = updatedStock;
+    } else {
+      const { data: stockData, error: stockError } = await supabase
+        .from('stocks')
+        .insert({
+          product_id: productId,
+          place: trimmedPlace || null,
+          quantity: qtyToAdd,
+          unit: trimmedUnit || null,
+          expiration_date: expiration || null,
+        })
+        .select(
+          `
+          id, place, quantity, unit, expiration_date,
+          product:products (
+            id, name, brand, category, sub_category, default_unit, barcode, is_main
           )
-          .single();
+        `,
+        )
+        .single();
 
-        if (stockError || !stockData) throw stockError || new Error('Erreur création stock');
-        finalStockRow = stockData;
-      }
-
-      const prodArray = (finalStockRow as any).product;
-      const product = Array.isArray(prodArray) ? prodArray[0] : prodArray;
-
-      const newItem: StockItem = {
-        id: finalStockRow.id,
-        place: finalStockRow.place,
-        quantity: finalStockRow.quantity,
-        unit: finalStockRow.unit,
-        expiration_date: finalStockRow.expiration_date,
-        product: product
-          ? {
-              id: product.id,
-              name: product.name,
-              brand: product.brand,
-              category: product.category,
-              default_unit: product.default_unit,
-              barcode: product.barcode ?? null,
-              is_main: !!product.is_main,
-            }
-          : null,
-      };
-
-      setStocks((prev) => {
-        const index = prev.findIndex((s) => s.id === newItem.id);
-        if (index === -1) return [...prev, newItem];
-        const copy = [...prev];
-        copy[index] = newItem;
-        return copy;
-      });
-
-      setName('');
-      setBrand('');
-      setCategory('');
-      setQuantity('1');
-      setUnit('unité');
-      setExpiration('');
-      setBarcode('');
-    } catch (err) {
-      console.error(err);
-      setError("Erreur lors de l'ajout du produit");
+      if (stockError || !stockData) throw stockError || new Error('Erreur création stock');
+      finalStockRow = stockData;
     }
-  };
+
+    const prodArray = (finalStockRow as any).product;
+    const product = Array.isArray(prodArray) ? prodArray[0] : prodArray;
+
+    const newItem: StockItem = {
+      id: finalStockRow.id,
+      place: finalStockRow.place,
+      quantity: finalStockRow.quantity,
+      unit: finalStockRow.unit,
+      expiration_date: finalStockRow.expiration_date,
+      product: product
+        ? {
+            id: product.id,
+            name: product.name,
+            brand: product.brand,
+            category: product.category,
+            sub_category: product.sub_category ?? null,
+            default_unit: product.default_unit,
+            barcode: product.barcode ?? null,
+            is_main: !!product.is_main,
+          }
+        : null,
+    };
+
+    setStocks((prev) => {
+      const index = prev.findIndex((s) => s.id === newItem.id);
+      if (index === -1) return [...prev, newItem];
+      const copy = [...prev];
+      copy[index] = newItem;
+      return copy;
+    });
+
+    // reset form
+    setName('');
+    setBrand('');
+    setCategory('');
+    setSubCategory('');
+    setQuantity('1');
+    setUnit('unité');
+    setExpiration('');
+    setBarcode('');
+  } catch (err) {
+    console.error(err);
+    setError("Erreur lors de l'ajout du produit");
+  }
+};
 
   // ---------- Shopping helpers ----------
   const recipeKindToCategory = (kind: RecipeKind) => (kind === 'sweet' ? 'Produit sucré' : 'Produit salé');
@@ -860,60 +897,35 @@ function App() {
     const local = findExistingProductForKeyword(keyword);
     if (local) return { product: local, created: false };
 
-    const { data: existing, error: existingError } = await supabase
-      .from('products')
-      .select('id, name, brand, category, default_unit, barcode, is_main')
-      .ilike('name', `%${keyword}%`)
-      .limit(1);
-
-    if (existingError) throw existingError;
-
-    if (existing && existing.length > 0) {
-      const p = existing[0] as any;
-      const normalized: Product = {
-        id: p.id,
-        name: p.name,
-        brand: p.brand,
-        category: p.category,
-        default_unit: p.default_unit,
-        barcode: p.barcode ?? null,
-        is_main: !!p.is_main,
-      };
-      setProducts((prev) => {
-        const idx = prev.findIndex((x) => x.id === normalized.id);
-        if (idx === -1) return [...prev, normalized];
-        const copy = [...prev];
-        copy[idx] = normalized;
-        return copy;
-      });
-      return { product: normalized, created: false };
-    }
-
-    const category = recipeKindToCategory(kind);
     const { data: created, error: createError } = await supabase
-      .from('products')
-      .insert({
-        name: keyword,
-        brand: null,
-        category,
-        default_unit: null,
-        barcode: null,
-        is_main: false,
-      })
-      .select('id, name, brand, category, default_unit, barcode, is_main')
-      .single();
+  .from('products')
+  .insert({
+    name: keyword,
+    brand: null,
+    category,
+    sub_category: null,        // ✅ important : existe dans ton schéma
+    default_unit: null,
+    barcode: null,
+    is_main: false,
+  })
+  .select('id, name, brand, category, sub_category, default_unit, barcode, is_main') // ✅ récupère sub_category
+  .single();
 
-    if (createError || !created) throw createError || new Error('Erreur création produit');
+if (createError || !created) throw createError || new Error('Erreur création produit');
 
-    const normalized: Product = {
-      id: (created as any).id,
-      name: (created as any).name,
-      brand: (created as any).brand,
-      category: (created as any).category,
-      default_unit: (created as any).default_unit,
-      barcode: (created as any).barcode ?? null,
-      is_main: !!(created as any).is_main,
-    };
+const normalized: Product = {
+  id: created.id,
+  name: created.name,
+  brand: created.brand,
+  category: created.category,
+  sub_category: created.sub_category ?? null,   // ✅ obligatoire
+  default_unit: created.default_unit,
+  barcode: created.barcode ?? null,
+  is_main: !!created.is_main,
+};
+
+setProducts((prev) => [...prev, normalized]);
+return { product: normalized, created: true };
 
     setProducts((prev) => [...prev, normalized]);
     return { product: normalized, created: true };
@@ -1002,40 +1014,148 @@ const changeUnit = async (item: StockItem, newUnit: string) => {
 };
 
   // ---------- Tabs ----------
-    const renderStockTab = () => {
-    const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
-      label: cat,
-      items: stocks.filter((s) => s.product?.category === cat),
-    }));
+const renderStockTab = () => {
+  const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
+    label: cat,
+    items: stocks.filter((s) => s.product?.category === cat),
+  }));
 
-    return (
-      <>
-        <div className="main-header">
-          <div>
-            <h1 className="main-title">Placards & frigo</h1>
-            <p className="main-subtitle">
-              Inventaire détaillé rangé par grandes catégories (plus de recap ici).
-            </p>
-          </div>
-          <div className="main-header-right">
-            <span className="tag">Inventaire</span>
-          </div>
+  const renderRowsTable = (rows: StockItem[]) => (
+    <div className="table-wrapper" style={{ maxHeight: 360 }}>
+      <table className="stock-table">
+        <thead>
+          <tr>
+            <th>Produit</th>
+            <th>Principal</th>
+            <th>Lieu</th>
+            <th>Quantité</th>
+            <th>Unité</th>
+            <th>Péremption</th>
+            <th>Statut</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((item) => {
+            const expDate = item.expiration_date;
+            const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
+            const status = getExpirationStatus(expDate, settings.soonDays);
+            const labelStatus = getExpirationLabel(status);
+
+            return (
+              <tr key={item.id}>
+                <td>
+                  <div className="product-cell">
+                    <span className="product-name">{item.product?.name ?? 'Produit'}</span>
+                    {item.product?.brand && <span className="product-brand">{item.product.brand}</span>}
+                  </div>
+                </td>
+
+                <td>
+                  {item.product ? (
+                    <input
+                      type="checkbox"
+                      checked={item.product.is_main}
+                      onChange={() => handleToggleMain(item.product!.id, item.product!.is_main)}
+                    />
+                  ) : (
+                    '-'
+                  )}
+                </td>
+
+                <td>{item.place || '-'}</td>
+
+                <td>
+                  <div className="qty-controls">
+                    <button
+                      type="button"
+                      className="qty-btn"
+                      onClick={() => void changeQuantity(item, -1)}
+                      title="Diminuer"
+                    >
+                      −
+                    </button>
+
+                    <span className="qty-value">{item.quantity ?? 0}</span>
+
+                    <button
+                      type="button"
+                      className="qty-btn"
+                      onClick={() => void changeQuantity(item, +1)}
+                      title="Augmenter"
+                    >
+                      +
+                    </button>
+                  </div>
+                </td>
+
+                <td>
+                  <select
+                    className="unit-select"
+                    value={item.unit ?? 'unité'}
+                    onChange={(e) => void changeUnit(item, e.target.value)}
+                  >
+                    {UNIT_OPTIONS.map((u) => (
+                      <option key={u.value} value={u.value}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+
+                <td>{exp}</td>
+
+                <td>
+                  <span className={`status-pill status-${status}`}>
+                    <span className="status-dot" />
+                    {labelStatus}
+                  </span>
+                </td>
+
+                <td>
+                  <button type="button" className="btn-tertiary" onClick={() => openEdit(item)} title="Modifier">
+                    ✏️
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <>
+      <div className="main-header">
+        <div>
+          <h1 className="main-title">Placards & frigo</h1>
+          <p className="main-subtitle">Inventaire détaillé rangé par grandes catégories.</p>
         </div>
+        <div className="main-header-right">
+          <span className="tag">Inventaire</span>
+        </div>
+      </div>
 
-        {loading ? (
-          <section className="card">
-            <p>Chargement...</p>
-          </section>
-        ) : stocks.length === 0 ? (
-          <section className="card">
-            <p className="muted">Aucun produit en stock pour l’instant.</p>
-          </section>
-        ) : (
-          <section className="category-grid">
-            {groupedByCategory.map(({ label, items }) => (
+      {loading ? (
+        <section className="card">
+          <p>Chargement...</p>
+        </section>
+      ) : stocks.length === 0 ? (
+        <section className="card">
+          <p className="muted">Aucun produit en stock pour l’instant.</p>
+        </section>
+      ) : (
+        <section className="category-grid">
+          {groupedByCategory.map(({ label, items }) => {
+            const isSweetOrSavory = label === 'Produit sucré' || label === 'Produit salé';
+
+            return (
               <section key={label} className="card">
                 <div className="category-head">
-                  <h2 className="section-title" style={{ margin: 0 }}>{label}</h2>
+                  <h2 className="section-title" style={{ margin: 0 }}>
+                    {label}
+                  </h2>
                   <span className="category-count">{items.length}</span>
                 </div>
 
@@ -1043,123 +1163,44 @@ const changeUnit = async (item: StockItem, newUnit: string) => {
                   <p className="muted" style={{ marginTop: '0.5rem' }}>
                     Aucun élément dans cette catégorie.
                   </p>
+                ) : isSweetOrSavory ? (
+                  <>
+                    {SUB_CATEGORIES.map((sc) => {
+                      const rows = items.filter((it) => (it.product?.sub_category ?? '') === sc);
+                      if (rows.length === 0) return null;
+
+                      return (
+                        <div key={sc} className="subcat-block">
+                          <h3 className="subcat-title">{sc}</h3>
+                          {renderRowsTable(rows)}
+                        </div>
+                      );
+                    })}
+
+                    {/* Optionnel : "Autres" */}
+                    {(() => {
+                      const others = items.filter((it) => !it.product?.sub_category);
+                      if (others.length === 0) return null;
+                      return (
+                        <div className="subcat-block">
+                          <h3 className="subcat-title">Autres</h3>
+                          {renderRowsTable(others)}
+                        </div>
+                      );
+                    })()}
+                  </>
                 ) : (
-                  <div className="table-wrapper" style={{ maxHeight: 360 }}>
-                    <table className="stock-table">
-                      <thead>
-                        <tr>
-                          <th>Produit</th>
-                          <th>Principal</th>
-                          <th>Lieu</th>
-                          <th>Quantité</th>
-                          <th>Unité</th>
-                          <th>Péremption</th>
-                          <th>Statut</th>
-                          <th>Actions</th>
-                        </tr>
-
-                      </thead>
-                      <tbody>
-                        {items.map((item) => {
-                          const expDate = item.expiration_date;
-                          const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
-                          const status = getExpirationStatus(expDate, settings.soonDays);
-                          const labelStatus = getExpirationLabel(status);
-
-                          return (
-                            <tr key={item.id}>
-                              <td>
-                                <div className="product-cell">
-                                  <span className="product-name">{item.product?.name ?? 'Produit'}</span>
-                                  {item.product?.brand && (
-                                    <span className="product-brand">{item.product.brand}</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td>
-                                {item.product ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={item.product.is_main}
-                                    onChange={() =>
-                                      handleToggleMain(item.product!.id, item.product!.is_main)
-                                    }
-                                  />
-                                ) : (
-                                  '-'
-                                )}
-                              </td>
-                              <td>{item.place || '-'}</td>
-                              <td>
-                                <div className="qty-controls">
-                                  <button
-                                    type="button"
-                                    className="qty-btn"
-                                    onClick={() => void changeQuantity(item, -1)}
-                                    title="Diminuer"
-                                  >
-                                    −
-                                  </button>
-
-                                  <span className="qty-value">
-                                    {item.quantity ?? 0}
-                                  </span>
-
-                                  <button
-                                    type="button"
-                                    className="qty-btn"
-                                    onClick={() => void changeQuantity(item, +1)}
-                                    title="Augmenter"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                              </td>
-                              <td>
-                                <select
-                                  className="unit-select"
-                                  value={item.unit ?? 'unité'}
-                                  onChange={(e) => void changeUnit(item, e.target.value)}
-                                >
-                                  {UNIT_OPTIONS.map((u) => (
-                                    <option key={u.value} value={u.value}>
-                                      {u.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <button
-                                  type="button"
-                                  className="btn-tertiary"
-                                  onClick={() => openEdit(item)}
-                                  title="Modifier"
-                                >
-                                  ✏️
-                                </button>
-                              </td>
-
-                              <td>{exp}</td>
-                              <td>
-                                <span className={`status-pill status-${status}`}>
-                                  <span className="status-dot" />
-                                  {labelStatus}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  renderRowsTable(items)
                 )}
               </section>
-            ))}
-          </section>
-        )}
-      </>
-    );
-  };
+            );
+          })}
+        </section>
+      )}
+    </>
+  );
+};
+
 
     const renderDashboard = () => (
     <>
@@ -1303,7 +1344,23 @@ const changeUnit = async (item: StockItem, newUnit: string) => {
               ))}
             </select>
           </div>
-
+          {(category === 'Produit sucré' || category === 'Produit salé') && (
+            <div className="field-group">
+              <label className="field-label">Sous-catégorie</label>
+              <select
+                className="field-input"
+                value={subCategory}
+                onChange={(e) => setSubCategory(e.target.value as SubCategory | '')}
+              >
+                <option value="">(Aucune)</option>
+                {SUB_CATEGORIES.map((sc) => (
+                  <option key={sc} value={sc}>
+                    {sc}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="field-group">
             <label className="field-label">Lieu</label>
             <input

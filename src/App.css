@@ -1066,3 +1066,22 @@ body {
   gap: 0.6rem;
   margin-top: 0.9rem;
 }
+
+.subcat-block {
+  margin-top: 0.8rem;
+}
+
+.subcat-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: #374151;
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.subcat-title::before {
+  content: "•";
+  opacity: 0.6;
+}
