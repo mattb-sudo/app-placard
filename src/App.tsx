@@ -822,13 +822,17 @@ function App() {
     (item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'expired',
   ).length;
 
-  const criticalItems = stocks.filter((item) => {
-    const status = getExpirationStatus(item.expiration_date, settings.soonDays);
-    return status === 'soon' || status === 'expired';
-  });
+  const soonList = stocks
+    .filter((item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'soon')
+    .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
+
+  const expiredList = stocks
+    .filter((item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'expired')
+    .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
+
 
   // ---------- Tabs ----------
-  const renderStockTab = () => {
+    const renderStockTab = () => {
     const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
       label: cat,
       items: stocks.filter((s) => s.product?.category === cat),
@@ -839,260 +843,120 @@ function App() {
         <div className="main-header">
           <div>
             <h1 className="main-title">Placards & frigo</h1>
-            <p className="main-subtitle">Gère ton inventaire en temps réel : lieux, quantités, péremption.</p>
+            <p className="main-subtitle">
+              Inventaire détaillé rangé par grandes catégories (plus de recap ici).
+            </p>
           </div>
           <div className="main-header-right">
-            <span className="tag">v0.1 – prototype</span>
+            <span className="tag">Inventaire</span>
           </div>
         </div>
 
-        <section className="stats-row">
-          <div className="stat-card">
-            <div className="stat-label">Articles en stock</div>
-            <div className="stat-value">{totalItems}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">À consommer bientôt</div>
-            <div className="stat-value accent">{soonItems}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Périmés</div>
-            <div className="stat-value danger">{expiredItems}</div>
-          </div>
-        </section>
-
-        {criticalItems.length > 0 && (
-          <section className="card card-soft">
-            <h2 className="section-title">À consommer rapidement</h2>
-            <p className="section-subtitle">
-              Ces produits arrivent en fin de vie, pense à les utiliser dans tes prochains repas.
-            </p>
-            <div className="chips-row">
-              {criticalItems.map((item) => (
-                <div key={item.id} className="chip">
-                  <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
-                  {item.expiration_date && (
-                    <span className="chip-meta">{new Date(item.expiration_date).toLocaleDateString()}</span>
-                  )}
+        {loading ? (
+          <section className="card">
+            <p>Chargement...</p>
+          </section>
+        ) : stocks.length === 0 ? (
+          <section className="card">
+            <p className="muted">Aucun produit en stock pour l’instant.</p>
+          </section>
+        ) : (
+          <section className="category-grid">
+            {groupedByCategory.map(({ label, items }) => (
+              <section key={label} className="card">
+                <div className="category-head">
+                  <h2 className="section-title" style={{ margin: 0 }}>{label}</h2>
+                  <span className="category-count">{items.length}</span>
                 </div>
-              ))}
-            </div>
+
+                {items.length === 0 ? (
+                  <p className="muted" style={{ marginTop: '0.5rem' }}>
+                    Aucun élément dans cette catégorie.
+                  </p>
+                ) : (
+                  <div className="table-wrapper" style={{ maxHeight: 360 }}>
+                    <table className="stock-table">
+                      <thead>
+                        <tr>
+                          <th>Produit</th>
+                          <th>Principal</th>
+                          <th>Lieu</th>
+                          <th>Quantité</th>
+                          <th>Péremption</th>
+                          <th>Statut</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item) => {
+                          const expDate = item.expiration_date;
+                          const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
+                          const status = getExpirationStatus(expDate, settings.soonDays);
+                          const labelStatus = getExpirationLabel(status);
+
+                          return (
+                            <tr key={item.id}>
+                              <td>
+                                <div className="product-cell">
+                                  <span className="product-name">{item.product?.name ?? 'Produit'}</span>
+                                  {item.product?.brand && (
+                                    <span className="product-brand">{item.product.brand}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td>
+                                {item.product ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={item.product.is_main}
+                                    onChange={() =>
+                                      handleToggleMain(item.product!.id, item.product!.is_main)
+                                    }
+                                  />
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
+                              <td>{item.place || '-'}</td>
+                              <td>
+                                {item.quantity ?? '-'} {item.unit ?? ''}
+                              </td>
+                              <td>{exp}</td>
+                              <td>
+                                <span className={`status-pill status-${status}`}>
+                                  <span className="status-dot" />
+                                  {labelStatus}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            ))}
           </section>
         )}
-
-        <section className="inventory-grid">
-          <div className="card">
-            <h2 className="section-title">Ajouter un produit</h2>
-            <p className="section-subtitle">Renseigne ce que tu viens de ranger dans tes placards.</p>
-
-            <form className="form-grid" onSubmit={handleAdd}>
-              <div className="field-group full">
-                <label className="field-label">Nom du produit *</label>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="field-input"
-                  placeholder="Pâtes, lait, riz..."
-                />
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">
-                  Code-barres <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>(optionnel)</span>
-                </label>
-                <div className="field-row">
-                  <input
-                    value={barcode}
-                    onChange={(e) => setBarcode(e.target.value)}
-                    className="field-input"
-                    placeholder="Ex : 3017624010701"
-                  />
-                  <button type="button" className="btn-secondary" onClick={() => setShowScanner(true)}>
-                    📷 Scanner
-                  </button>
-                </div>
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">Marque</label>
-                <input
-                  value={brand}
-                  onChange={(e) => setBrand(e.target.value)}
-                  className="field-input"
-                  placeholder="Barilla, Président..."
-                />
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">Catégorie principale</label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value as MainCategory | '')}
-                  className="field-input"
-                >
-                  <option value="">Choisir une catégorie...</option>
-                  {MAIN_CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">Lieu</label>
-                <input
-                  value={place}
-                  onChange={(e) => setPlace(e.target.value)}
-                  className="field-input"
-                  placeholder="Placard, frigo, congélateur..."
-                />
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">Quantité</label>
-                <div className="field-row">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    className="field-input"
-                  />
-                  <input
-                    value={unit}
-                    onChange={(e) => setUnit(e.target.value)}
-                    className="field-input"
-                    placeholder="unité, g, ml..."
-                  />
-                </div>
-              </div>
-
-              <div className="field-group">
-                <label className="field-label">Date de péremption</label>
-                <input
-                  type="date"
-                  value={expiration}
-                  onChange={(e) => setExpiration(e.target.value)}
-                  className="field-input"
-                />
-              </div>
-
-              <div className="form-actions">
-                <button type="submit" className="btn-primary">
-                  Ajouter au stock
-                </button>
-              </div>
-
-              {autoFillLoading && (
-                <p className="error-text" style={{ color: '#4b5563' }}>
-                  Recherche des informations du produit…
-                </p>
-              )}
-
-              {error && <p className="error-text">{error}</p>}
-            </form>
-          </div>
-
-          <div className="card">
-            <h2 className="section-title">Inventaire détaillé par catégorie</h2>
-
-            {loading ? (
-              <p>Chargement...</p>
-            ) : stocks.length === 0 ? (
-              <p className="muted">Aucun produit en stock pour l’instant.</p>
-            ) : (
-              <div className="table-wrapper">
-                {groupedByCategory.map(({ label, items }) =>
-                  items.length === 0 ? null : (
-                    <div key={label} style={{ marginBottom: '0.9rem' }}>
-                      <h3
-                        style={{
-                          fontSize: '0.9rem',
-                          margin: '0 0 0.25rem',
-                          color: '#374151',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {label}
-                      </h3>
-                      <table className="stock-table">
-                        <thead>
-                          <tr>
-                            <th>Produit</th>
-                            <th>Principal</th>
-                            <th>Lieu</th>
-                            <th>Quantité</th>
-                            <th>Péremption</th>
-                            <th>Statut</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {items.map((item) => {
-                            const expDate = item.expiration_date;
-                            const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
-                            const status = getExpirationStatus(expDate, settings.soonDays);
-                            const labelStatus = getExpirationLabel(status);
-
-                            return (
-                              <tr key={item.id}>
-                                <td>
-                                  <div className="product-cell">
-                                    <span className="product-name">{item.product?.name ?? 'Produit'}</span>
-                                    {item.product?.brand && <span className="product-brand">{item.product.brand}</span>}
-                                  </div>
-                                </td>
-                                <td>
-                                  {item.product ? (
-                                    <input
-                                      type="checkbox"
-                                      checked={item.product.is_main}
-                                      onChange={() => handleToggleMain(item.product!.id, item.product!.is_main)}
-                                    />
-                                  ) : (
-                                    '-'
-                                  )}
-                                </td>
-                                <td>{item.place || '-'}</td>
-                                <td>
-                                  {item.quantity ?? '-'} {item.unit ?? ''}
-                                </td>
-                                <td>{exp}</td>
-                                <td>
-                                  <span className={`status-pill status-${status}`}>
-                                    <span className="status-dot" />
-                                    {labelStatus}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ),
-                )}
-              </div>
-            )}
-          </div>
-        </section>
       </>
     );
   };
 
-  const renderDashboard = () => (
+    const renderDashboard = () => (
     <>
       <div className="main-header">
         <div>
           <h1 className="main-title">Tableau de bord</h1>
-          <p className="main-subtitle">Vue d’ensemble de tes stocks et de ce qu’il faut surveiller.</p>
+          <p className="main-subtitle">
+            Vue d’ensemble + actions rapides : alertes péremption et ajout d’un produit.
+          </p>
         </div>
         <div className="main-header-right">
           <span className="tag">Aperçu global</span>
         </div>
       </div>
 
+      {/* Recap */}
       <section className="stats-row">
         <div className="stat-card">
           <div className="stat-label">Articles en stock</div>
@@ -1110,8 +974,174 @@ function App() {
           <div className="stat-foot">À vérifier rapidement</div>
         </div>
       </section>
+
+      {/* Détails péremption */}
+      <section className="dashboard-grid">
+        <section className="card card-soft">
+          <h2 className="section-title">À consommer bientôt</h2>
+          <p className="section-subtitle">
+            Produits à utiliser dans les {settings.soonDays} prochains jours.
+          </p>
+
+          {soonList.length === 0 ? (
+            <p className="muted">Rien à signaler ✅</p>
+          ) : (
+            <div className="chips-row">
+              {soonList.map((item) => (
+                <div key={item.id} className="chip">
+                  <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
+                  {item.expiration_date && (
+                    <span className="chip-meta">
+                      {new Date(item.expiration_date).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <h2 className="section-title">Périmés</h2>
+          <p className="section-subtitle">À jeter / vérifier.</p>
+
+          {expiredList.length === 0 ? (
+            <p className="muted">Aucun produit périmé ✅</p>
+          ) : (
+            <div className="chips-row">
+              {expiredList.map((item) => (
+                <div key={item.id} className="chip">
+                  <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
+                  {item.expiration_date && (
+                    <span className="chip-meta">
+                      {new Date(item.expiration_date).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </section>
+
+      {/* Ajout produit */}
+      <section className="card">
+        <h2 className="section-title">Ajouter un produit</h2>
+        <p className="section-subtitle">
+          Ajout rapide depuis le tableau de bord (scanner + auto-remplissage OpenFoodFacts).
+        </p>
+
+        <form className="form-grid" onSubmit={handleAdd}>
+          <div className="field-group full">
+            <label className="field-label">Nom du produit *</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="field-input"
+              placeholder="Pâtes, lait, riz..."
+            />
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">
+              Code-barres <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>(optionnel)</span>
+            </label>
+            <div className="field-row">
+              <input
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                className="field-input"
+                placeholder="Ex : 3017624010701"
+              />
+              <button type="button" className="btn-secondary" onClick={() => setShowScanner(true)}>
+                📷 Scanner
+              </button>
+            </div>
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Marque</label>
+            <input
+              value={brand}
+              onChange={(e) => setBrand(e.target.value)}
+              className="field-input"
+              placeholder="Barilla, Président..."
+            />
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Catégorie principale</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value as MainCategory | '')}
+              className="field-input"
+            >
+              <option value="">Choisir une catégorie...</option>
+              {MAIN_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Lieu</label>
+            <input
+              value={place}
+              onChange={(e) => setPlace(e.target.value)}
+              className="field-input"
+              placeholder="Placard, frigo, congélateur..."
+            />
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Quantité</label>
+            <div className="field-row">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="field-input"
+              />
+              <input
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                className="field-input"
+                placeholder="unité, g, ml..."
+              />
+            </div>
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Date de péremption</label>
+            <input
+              type="date"
+              value={expiration}
+              onChange={(e) => setExpiration(e.target.value)}
+              className="field-input"
+            />
+          </div>
+
+          <div className="form-actions">
+            <button type="submit" className="btn-primary">
+              Ajouter au stock
+            </button>
+          </div>
+
+          {autoFillLoading && (
+            <p className="error-text" style={{ color: '#4b5563' }}>
+              Recherche des informations du produit…
+            </p>
+          )}
+          {error && <p className="error-text">{error}</p>}
+        </form>
+      </section>
     </>
   );
+
 
   const renderShoppingTab = () => {
     const presentProductIds = new Set(
