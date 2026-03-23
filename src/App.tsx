@@ -186,6 +186,26 @@ function mapOffCategoryToMainCategory(offCat: string): MainCategory {
   return 'Produit salé';
 }
 
+const UNIT_OPTIONS = [
+  { value: 'unité', label: 'unité' },
+  { value: 'g', label: 'g' },
+  { value: 'l', label: 'l' },
+] as const;
+
+function stepForUnit(unit: string | null): number {
+  const u = (unit ?? 'unité').toLowerCase();
+  if (u === 'g') return 50;       // +50g
+  if (u === 'l') return 0.05;     // +0.05L (= 50ml)
+  return 1;                       // +1 unité
+}
+
+function roundQty(value: number, unit: string | null): number {
+  const u = (unit ?? 'unité').toLowerCase();
+  if (u === 'l') return Math.round(value * 100) / 100; // 2 décimales
+  return Math.round(value * 10) / 10;                  // safe (0.1) si besoin
+}
+
+
 const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
   { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
@@ -227,6 +247,19 @@ function App() {
   const [newRecipeKind, setNewRecipeKind] = useState<RecipeKind>('savory');
   const [newRecipeIngredients, setNewRecipeIngredients] = useState('');
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<StockItem | null>(null);
+
+  const [editName, setEditName] = useState('');
+  const [editBrand, setEditBrand] = useState('');
+  const [editCategory, setEditCategory] = useState<MainCategory | ''>('');
+  const [editPlace, setEditPlace] = useState('');
+  const [editQty, setEditQty] = useState('0');
+  const [editUnit, setEditUnit] = useState('unité');
+  const [editExpiration, setEditExpiration] = useState(''); // '' => null
+  const [editBarcode, setEditBarcode] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
   // ---------- Settings localStorage ----------
   useEffect(() => {
     try {
@@ -258,6 +291,109 @@ function App() {
   useEffect(() => {
     setPlace(settings.defaultPlace);
   }, [settings.defaultPlace]);
+
+      const openEdit = (item: StockItem) => {
+        setEditTarget(item);
+
+        setEditName(item.product?.name ?? '');
+        setEditBrand(item.product?.brand ?? '');
+        setEditCategory((item.product?.category as MainCategory) ?? '');
+        setEditPlace(item.place ?? '');
+        setEditQty(String(item.quantity ?? 0));
+        setEditUnit(item.unit ?? 'unité');
+        setEditExpiration(item.expiration_date ?? ''); // '' si null
+        setEditBarcode(item.product?.barcode ?? '');
+
+        setEditOpen(true);
+      };
+  const saveEdit = async () => {
+  if (!editTarget?.product?.id) {
+    setError("Impossible d'éditer : produit manquant.");
+    return;
+  }
+
+  setEditSaving(true);
+  setError(null);
+
+  const productId = editTarget.product.id;
+  const stockId = editTarget.id;
+
+  try {
+    // 1) update product
+    const { error: prodErr } = await supabase
+      .from('products')
+      .update({
+        name: editName.trim(),
+        brand: editBrand.trim() || null,
+        category: editCategory ? editCategory : null,
+        barcode: editBarcode.trim() || null,
+      })
+      .eq('id', productId);
+
+    if (prodErr) throw prodErr;
+
+    // 2) update stock
+    const qtyNum = Number(editQty);
+    const qtyFinal = Number.isFinite(qtyNum) ? qtyNum : 0;
+
+    const { data: stockRow, error: stockErr } = await supabase
+      .from('stocks')
+      .update({
+        place: editPlace.trim() || null,
+        quantity: qtyFinal,
+        unit: editUnit || 'unité',
+        expiration_date: editExpiration ? editExpiration : null, // ✅ supprimable
+      })
+      .eq('id', stockId)
+      .select('id, place, quantity, unit, expiration_date')
+      .single();
+
+    if (stockErr || !stockRow) throw stockErr;
+
+    // 3) update local states
+    setStocks((prev) =>
+      prev.map((s) =>
+        s.id === stockId
+          ? {
+              ...s,
+              ...stockRow,
+              product: s.product
+                ? {
+                    ...s.product,
+                    name: editName.trim(),
+                    brand: editBrand.trim() || null,
+                    category: editCategory ? editCategory : null,
+                    barcode: editBarcode.trim() || null,
+                  }
+                : null,
+            }
+          : s,
+      ),
+    );
+
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === productId
+          ? {
+              ...p,
+              name: editName.trim(),
+              brand: editBrand.trim() || null,
+              category: editCategory ? editCategory : null,
+              barcode: editBarcode.trim() || null,
+            }
+          : p,
+      ),
+    );
+
+    setEditOpen(false);
+    setEditTarget(null);
+  } catch (e: any) {
+    console.error(e);
+    setError(e?.message ? `Erreur: ${e.message}` : "Erreur lors de l'enregistrement.");
+  } finally {
+    setEditSaving(false);
+  }
+};
 
   // ---------- OFF autofill ----------
   const autofillFromBarcode = async (code: string) => {
@@ -830,6 +966,40 @@ function App() {
     .filter((item) => getExpirationStatus(item.expiration_date, settings.soonDays) === 'expired')
     .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
+  const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date'>>) => {
+  setError(null);
+
+  const { data, error } = await supabase
+    .from('stocks')
+    .update(patch)
+    .eq('id', stockId)
+    .select('id, place, quantity, unit, expiration_date')
+    .single();
+
+  if (error || !data) {
+    console.error(error);
+    setError("Erreur lors de la mise à jour du stock.");
+    return null;
+  }
+
+  // update state local
+  setStocks((prev) =>
+    prev.map((s) => (s.id === stockId ? { ...s, ...data } : s)),
+  );
+
+  return data;
+};
+
+const changeQuantity = async (item: StockItem, direction: 1 | -1) => {
+  const current = item.quantity ?? 0;
+  const step = stepForUnit(item.unit);
+  const next = Math.max(0, roundQty(current + direction * step, item.unit));
+  await updateStock(item.id, { quantity: next });
+};
+
+const changeUnit = async (item: StockItem, newUnit: string) => {
+  await updateStock(item.id, { unit: newUnit });
+};
 
   // ---------- Tabs ----------
     const renderStockTab = () => {
@@ -882,9 +1052,12 @@ function App() {
                           <th>Principal</th>
                           <th>Lieu</th>
                           <th>Quantité</th>
+                          <th>Unité</th>
                           <th>Péremption</th>
                           <th>Statut</th>
+                          <th>Actions</th>
                         </tr>
+
                       </thead>
                       <tbody>
                         {items.map((item) => {
@@ -918,8 +1091,54 @@ function App() {
                               </td>
                               <td>{item.place || '-'}</td>
                               <td>
-                                {item.quantity ?? '-'} {item.unit ?? ''}
+                                <div className="qty-controls">
+                                  <button
+                                    type="button"
+                                    className="qty-btn"
+                                    onClick={() => void changeQuantity(item, -1)}
+                                    title="Diminuer"
+                                  >
+                                    −
+                                  </button>
+
+                                  <span className="qty-value">
+                                    {item.quantity ?? 0}
+                                  </span>
+
+                                  <button
+                                    type="button"
+                                    className="qty-btn"
+                                    onClick={() => void changeQuantity(item, +1)}
+                                    title="Augmenter"
+                                  >
+                                    +
+                                  </button>
+                                </div>
                               </td>
+                              <td>
+                                <select
+                                  className="unit-select"
+                                  value={item.unit ?? 'unité'}
+                                  onChange={(e) => void changeUnit(item, e.target.value)}
+                                >
+                                  {UNIT_OPTIONS.map((u) => (
+                                    <option key={u.value} value={u.value}>
+                                      {u.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="btn-tertiary"
+                                  onClick={() => openEdit(item)}
+                                  title="Modifier"
+                                >
+                                  ✏️
+                                </button>
+                              </td>
+
                               <td>{exp}</td>
                               <td>
                                 <span className={`status-pill status-${status}`}>
@@ -1575,6 +1794,92 @@ function App() {
       {showScanner && (
         <BarcodeScanner onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />
       )}
+      {editOpen && editTarget && (
+  <div className="modal-backdrop">
+    <div className="modal-card">
+      <div className="modal-head">
+        <h3 style={{ margin: 0 }}>Modifier un produit</h3>
+        <button type="button" className="modal-close" onClick={() => setEditOpen(false)}>
+          ✕
+        </button>
+      </div>
+
+      <div className="form-grid" style={{ marginTop: '0.5rem' }}>
+        <div className="field-group full">
+          <label className="field-label">Nom</label>
+          <input className="field-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Marque</label>
+          <input className="field-input" value={editBrand} onChange={(e) => setEditBrand(e.target.value)} />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Catégorie</label>
+          <select
+            className="field-input"
+            value={editCategory}
+            onChange={(e) => setEditCategory(e.target.value as MainCategory | '')}
+          >
+            <option value="">(Aucune)</option>
+            {MAIN_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Lieu</label>
+          <input className="field-input" value={editPlace} onChange={(e) => setEditPlace(e.target.value)} />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Quantité</label>
+          <input className="field-input" value={editQty} onChange={(e) => setEditQty(e.target.value)} />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Unité</label>
+          <select className="field-input" value={editUnit} onChange={(e) => setEditUnit(e.target.value)}>
+            {UNIT_OPTIONS.map((u) => (
+              <option key={u.value} value={u.value}>{u.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field-group">
+          <label className="field-label">Date de péremption (optionnelle)</label>
+          <input
+            type="date"
+            className="field-input"
+            value={editExpiration}
+            onChange={(e) => setEditExpiration(e.target.value)}
+          />
+          <button type="button" className="btn-tertiary" onClick={() => setEditExpiration('')}>
+            Effacer la date
+          </button>
+        </div>
+
+        <div className="field-group full">
+          <label className="field-label">Code-barres</label>
+          <input className="field-input" value={editBarcode} onChange={(e) => setEditBarcode(e.target.value)} />
+        </div>
+      </div>
+
+      {error && <p className="error-text">{error}</p>}
+
+      <div className="modal-actions">
+        <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>
+          Annuler
+        </button>
+        <button type="button" className="btn-primary" disabled={editSaving} onClick={() => void saveEdit()}>
+          {editSaving ? 'Enregistrement…' : 'Enregistrer'}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       <div className="app-shell">
         <aside className="sidebar">
