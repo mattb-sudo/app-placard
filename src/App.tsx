@@ -4,7 +4,7 @@ import { supabase } from './supabaseClient';
 import { BarcodeScanner } from './BarcodeScanner';
 import './App.css';
 
-type Tab = 'dashboard' | 'stock' | 'history' | 'shopping' | 'recipes' | 'settings';
+type Tab = 'dashboard' | 'stock' | 'history' | 'weekmenu' | 'shopping' | 'recipes' | 'settings';
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
 
 const MAIN_CATEGORIES = [
@@ -72,6 +72,26 @@ const DEFAULT_SETTINGS: Settings = {
   soonDays: 7,
   recipesMaxMissing: 2,
   defaultPlace: 'Placard',
+};
+
+type MealSlot = 'breakfast' | 'lunch' | 'dinner';
+
+const MEAL_SLOTS: { key: MealSlot; label: string }[] = [
+  { key: 'breakfast', label: 'Petit-déj' },
+  { key: 'lunch', label: 'Déjeuner' },
+  { key: 'dinner', label: 'Dîner' },
+];
+
+type WeekMeal = {
+  id: string;
+  meal_date: string; // 'YYYY-MM-DD'
+  meal_slot: MealSlot;
+  recipe_id: string | null;
+  recipe_name: string;
+  recipe_kind: RecipeKind | null;
+  ingredients: string[] | null;
+  servings: number | null;
+  notes: string | null;
 };
 
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
@@ -221,11 +241,33 @@ function roundQty(value: number, unit: string | null): number {
   return Math.round(value * 10) / 10;                  // safe (0.1) si besoin
 }
 
+function toDateKey(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function startOfWeekMonday(d: Date): Date {
+  const copy = new Date(d);
+  const day = copy.getDay(); // 0=dim,1=lun...
+  const diff = (day === 0 ? -6 : 1 - day);
+  copy.setDate(copy.getDate() + diff);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function addDays(d: Date, days: number): Date {
+  const copy = new Date(d);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
 
 const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
   { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
   { key: 'history', label: 'Anciens achats', icon: '🕘' },
+  { key: 'weekmenu', label: 'Menu semaine', icon: '📅' },
   { key: 'shopping', label: 'Listes de courses', icon: '🛒' },
   { key: 'recipes', label: 'Recettes', icon: '🍽️' },
   { key: 'settings', label: 'Réglages', icon: '⚙️' },
@@ -278,6 +320,20 @@ function App() {
   const [editSaving, setEditSaving] = useState(false);
 
   const [editSubCategory, setEditSubCategory] = useState<SubCategory | ''>('');
+
+  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekMonday(new Date()));
+  const [weekMeals, setWeekMeals] = useState<WeekMeal[]>([]);
+  const [weekMealsLoading, setWeekMealsLoading] = useState(false);
+
+  // modal planning
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planDate, setPlanDate] = useState<string>(''); // YYYY-MM-DD
+  const [planSlot, setPlanSlot] = useState<MealSlot>('lunch');
+  const [planRecipeValue, setPlanRecipeValue] = useState<string>(''); // db:<id> | sample:<id> | custom
+  const [planCustomName, setPlanCustomName] = useState('');
+  const [planServings, setPlanServings] = useState<string>('1');
+  const [planNotes, setPlanNotes] = useState('');
+
   // ---------- Settings localStorage ----------
   useEffect(() => {
     try {
@@ -421,6 +477,49 @@ function App() {
     setEditSaving(false);
   }
 };
+
+const fetchWeekMeals = async (start: Date) => {
+  setWeekMealsLoading(true);
+  setError(null);
+
+  const from = toDateKey(start);
+  const to = toDateKey(addDays(start, 6));
+
+  const { data, error } = await supabase
+    .from('week_meals')
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, servings, notes')
+    .gte('meal_date', from)
+    .lte('meal_date', to)
+    .order('meal_date', { ascending: true });
+
+  if (error) {
+    console.error(error);
+    setError("Impossible de charger le menu de la semaine.");
+    setWeekMeals([]);
+    setWeekMealsLoading(false);
+    return;
+  }
+
+  const normalized: WeekMeal[] = (data ?? []).map((r: any) => ({
+    id: r.id,
+    meal_date: r.meal_date,
+    meal_slot: r.meal_slot as MealSlot,
+    recipe_id: r.recipe_id ?? null,
+    recipe_name: String(r.recipe_name ?? ''),
+    recipe_kind: (r.recipe_kind as RecipeKind) ?? null,
+    ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(String) : null,
+    servings: r.servings ?? null,
+    notes: r.notes ?? null,
+  }));
+
+  setWeekMeals(normalized);
+  setWeekMealsLoading(false);
+};
+
+useEffect(() => {
+  void fetchWeekMeals(weekStart);
+}, [weekStart]);
+
 useEffect(() => {
   if (category !== 'Produit sucré' && category !== 'Produit salé') {
     setEditSubCategory('');
@@ -460,6 +559,72 @@ useEffect(() => {
       setAutoFillLoading(false);
     }
   };
+
+  const upsertWeekMeal = async (payload: Omit<WeekMeal, 'id'>) => {
+  setError(null);
+
+  const { data, error } = await supabase
+    .from('week_meals')
+    .upsert(
+      {
+        meal_date: payload.meal_date,
+        meal_slot: payload.meal_slot,
+        recipe_id: payload.recipe_id,
+        recipe_name: payload.recipe_name,
+        recipe_kind: payload.recipe_kind,
+        ingredients: payload.ingredients,
+        servings: payload.servings,
+        notes: payload.notes,
+      },
+      { onConflict: 'meal_date,meal_slot' },
+    )
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, servings, notes')
+    .single();
+
+  if (error || !data) {
+    console.error(error);
+    setError("Erreur lors de l'enregistrement du repas.");
+    return;
+  }
+
+  const row: WeekMeal = {
+    id: data.id,
+    meal_date: data.meal_date,
+    meal_slot: data.meal_slot as MealSlot,
+    recipe_id: data.recipe_id ?? null,
+    recipe_name: String(data.recipe_name ?? ''),
+    recipe_kind: (data.recipe_kind as RecipeKind) ?? null,
+    ingredients: Array.isArray(data.ingredients) ? data.ingredients.map(String) : null,
+    servings: data.servings ?? null,
+    notes: data.notes ?? null,
+  };
+
+  setWeekMeals((prev) => {
+    const idx = prev.findIndex((m) => m.meal_date === row.meal_date && m.meal_slot === row.meal_slot);
+    if (idx === -1) return [...prev, row];
+    const copy = [...prev];
+    copy[idx] = row;
+    return copy;
+  });
+};
+
+const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
+  setError(null);
+
+  const { error } = await supabase
+    .from('week_meals')
+    .delete()
+    .eq('meal_date', meal_date)
+    .eq('meal_slot', meal_slot);
+
+  if (error) {
+    console.error(error);
+    setError("Impossible de supprimer ce repas.");
+    return;
+  }
+
+  setWeekMeals((prev) => prev.filter((m) => !(m.meal_date === meal_date && m.meal_slot === meal_slot)));
+};
 
   const handleBarcodeDetected = (raw: string) => {
     const cleaned = cleanBarcode(raw);
@@ -1141,6 +1306,308 @@ const renderHistoryTab = () => {
           </section>
         ))}
       </section>
+    </>
+  );
+};
+
+const renderWeekMenuTab = () => {
+  const days = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
+  const dayKeys = days.map(toDateKey);
+
+  // recettes disponibles : DB + exemples
+  const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
+
+  const getCell = (dateKey: string, slot: MealSlot) =>
+    weekMeals.find((m) => m.meal_date === dateKey && m.meal_slot === slot) ?? null;
+
+  const openPlan = (dateKey: string, slot: MealSlot) => {
+    const existing = getCell(dateKey, slot);
+
+    setPlanDate(dateKey);
+    setPlanSlot(slot);
+
+    if (existing) {
+      // pré-remplir
+      setPlanRecipeValue(existing.recipe_id ? `db:${existing.recipe_id}` : 'custom');
+      setPlanCustomName(existing.recipe_id ? '' : existing.recipe_name);
+      setPlanServings(String(existing.servings ?? 1));
+      setPlanNotes(existing.notes ?? '');
+    } else {
+      setPlanRecipeValue('');
+      setPlanCustomName('');
+      setPlanServings('1');
+      setPlanNotes('');
+    }
+
+    setPlanOpen(true);
+  };
+
+  const savePlan = async () => {
+    // 1) déterminer recette sélectionnée
+    let recipe_id: string | null = null;
+    let recipe_name = '';
+    let recipe_kind: RecipeKind | null = null;
+    let ingredients: string[] | null = null;
+
+    const v = planRecipeValue;
+
+    if (!v || v === 'custom') {
+      recipe_name = planCustomName.trim();
+      if (!recipe_name) {
+        setError("Donne un nom au repas (ou choisis une recette).");
+        return;
+      }
+    } else if (v.startsWith('db:')) {
+      recipe_id = v.slice(3);
+      const r = allRecipes.find((x) => x.id === recipe_id);
+      recipe_name = r?.name ?? 'Recette';
+      recipe_kind = r?.kind ?? null;
+      ingredients = r?.ingredients ?? null;
+    } else if (v.startsWith('sample:')) {
+      const rid = v.slice(7);
+      const r = allRecipes.find((x) => x.id === rid);
+      recipe_name = r?.name ?? 'Recette';
+      recipe_kind = r?.kind ?? null;
+      ingredients = r?.ingredients ?? null;
+      // pas de recipe_id en DB pour les samples => on stocke un snapshot
+      recipe_id = null;
+    }
+
+    const servingsNum = Number(planServings);
+    const servings = Number.isFinite(servingsNum) ? servingsNum : null;
+
+    await upsertWeekMeal({
+      meal_date: planDate,
+      meal_slot: planSlot,
+      recipe_id,
+      recipe_name,
+      recipe_kind,
+      ingredients,
+      servings,
+      notes: planNotes.trim() || null,
+    });
+
+    setPlanOpen(false);
+  };
+
+  // bonus : ajouter ingrédients manquants de la semaine à la liste
+  const addWeekMissingToShopping = async () => {
+    // stock dispo (noms)
+    const normalize = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    const stockNames = stocks
+      .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
+      .map((s) => normalize(s.product!.name));
+
+    const hasIngredient = (ingredient: string) => {
+      const key = normalize(ingredient);
+      return stockNames.some((n) => n.includes(key));
+    };
+
+    // collect missing
+    const missingSavory = new Set<string>();
+    const missingSweet = new Set<string>();
+
+    for (const m of weekMeals) {
+      if (!m.ingredients || m.ingredients.length === 0) continue;
+      for (const ing of m.ingredients) {
+        if (hasIngredient(ing)) continue;
+        if (m.recipe_kind === 'sweet') missingSweet.add(ing);
+        else missingSavory.add(ing); // défaut: salé
+      }
+    }
+
+    const a = Array.from(missingSavory);
+    const b = Array.from(missingSweet);
+
+    if (a.length === 0 && b.length === 0) {
+      setInfo("✅ Aucun ingrédient manquant détecté pour la semaine.");
+      setActiveTab('shopping');
+      return;
+    }
+
+    // on réutilise ta logique existante
+    if (a.length > 0) await addMissingIngredientsToShopping(a, 'savory');
+    if (b.length > 0) await addMissingIngredientsToShopping(b, 'sweet');
+  };
+
+  return (
+    <>
+      <div className="main-header">
+        <div>
+          <h1 className="main-title">Menu de la semaine</h1>
+          <p className="main-subtitle">
+            Planifie tes repas du lundi au dimanche (petit-déj / déjeuner / dîner).
+          </p>
+        </div>
+        <div className="main-header-right">
+          <span className="tag">Planning</span>
+        </div>
+      </div>
+
+      <section className="card">
+        <div className="week-controls">
+          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, -7))}>
+            ← Semaine précédente
+          </button>
+          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(startOfWeekMonday(new Date()))}>
+            Cette semaine
+          </button>
+          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, 7))}>
+            Semaine suivante →
+          </button>
+
+          <div style={{ flex: 1 }} />
+
+          <button type="button" className="btn-secondary" onClick={() => void addWeekMissingToShopping()}>
+            🛒 Ajouter ingrédients manquants
+          </button>
+        </div>
+
+        {weekMealsLoading ? (
+          <p className="muted" style={{ marginTop: '0.6rem' }}>Chargement…</p>
+        ) : (
+          <div className="week-grid">
+            <div className="week-row week-row--head">
+              <div className="week-cell week-cell--head">Repas</div>
+              {days.map((d) => (
+                <div key={toDateKey(d)} className="week-cell week-cell--head">
+                  {d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: '2-digit' })}
+                </div>
+              ))}
+            </div>
+
+            {MEAL_SLOTS.map((slot) => (
+              <div key={slot.key} className="week-row">
+                <div className="week-cell week-cell--slot">{slot.label}</div>
+
+                {dayKeys.map((dk) => {
+                  const cell = getCell(dk, slot.key);
+
+                  return (
+                    <div key={`${dk}-${slot.key}`} className="week-cell">
+                      {!cell ? (
+                        <button
+                          type="button"
+                          className="week-add"
+                          onClick={() => openPlan(dk, slot.key)}
+                        >
+                          + Ajouter
+                        </button>
+                      ) : (
+                        <div className="meal-mini">
+                          <div className="meal-mini-title">{cell.recipe_name}</div>
+                          <div className="meal-mini-meta">
+                            {cell.servings ? `${cell.servings} pers.` : ''}
+                            {cell.notes ? ` · ${cell.notes}` : ''}
+                          </div>
+                          <div className="meal-mini-actions">
+                            <button type="button" className="btn-tertiary" onClick={() => openPlan(dk, slot.key)}>
+                              ✏️
+                            </button>
+                            <button type="button" className="btn-tertiary" onClick={() => void deleteWeekMeal(dk, slot.key)}>
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && <p className="error-text">{error}</p>}
+      </section>
+
+      {/* Modal plan */}
+      {planOpen && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <div className="modal-head">
+              <h3 style={{ margin: 0 }}>
+                Planifier — {planDate} · {MEAL_SLOTS.find((s) => s.key === planSlot)?.label}
+              </h3>
+              <button type="button" className="modal-close" onClick={() => setPlanOpen(false)}>✕</button>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: '0.6rem' }}>
+              <div className="field-group full">
+                <label className="field-label">Choisir une recette</label>
+                <select
+                  className="field-input"
+                  value={planRecipeValue}
+                  onChange={(e) => setPlanRecipeValue(e.target.value)}
+                >
+                  <option value="">(Choisir…)</option>
+                  <option value="custom">Repas libre (texte)</option>
+
+                  <optgroup label="Recettes enregistrées">
+                    {dbRecipes.map((r) => (
+                      <option key={r.id} value={`db:${r.id}`}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </optgroup>
+
+                  <optgroup label="Recettes exemples">
+                    {SAMPLE_RECIPES.map((r) => (
+                      <option key={r.id} value={`sample:${r.id}`}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+
+              {(planRecipeValue === 'custom' || planRecipeValue === '') && (
+                <div className="field-group full">
+                  <label className="field-label">Nom du repas</label>
+                  <input
+                    className="field-input"
+                    value={planCustomName}
+                    onChange={(e) => setPlanCustomName(e.target.value)}
+                    placeholder="Ex : Restes / Sandwich / Pizza..."
+                  />
+                </div>
+              )}
+
+              <div className="field-group">
+                <label className="field-label">Portions</label>
+                <input
+                  className="field-input"
+                  value={planServings}
+                  onChange={(e) => setPlanServings(e.target.value)}
+                  type="number"
+                  min={1}
+                />
+              </div>
+
+              <div className="field-group full">
+                <label className="field-label">Notes</label>
+                <input
+                  className="field-input"
+                  value={planNotes}
+                  onChange={(e) => setPlanNotes(e.target.value)}
+                  placeholder="Ex : avec salade / sans lactose / à préparer la veille…"
+                />
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setPlanOpen(false)}>
+                Annuler
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void savePlan()}>
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };
@@ -2001,6 +2468,7 @@ const renderStockTab = () => {
   else if (activeTab === 'recipes') mainContent = renderRecipesTab();
   else if (activeTab === 'settings') mainContent = renderSettingsTab();
   else if (activeTab === 'history') mainContent = renderHistoryTab();
+  else if (activeTab === 'weekmenu') mainContent = renderWeekMenuTab();
   else mainContent = renderPlaceholder('Section', 'À venir');
 
   return (
