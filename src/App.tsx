@@ -31,6 +31,14 @@ const SUB_CATEGORIES = [
 
 type SubCategory = (typeof SUB_CATEGORIES)[number];
 
+type IngredientUnit = 'g' | 'ml' | 'unité';
+
+type RecipeIngredient = {
+  name: string;
+  amount: number | null;
+  unit: IngredientUnit | null;
+};
+
 type Product = {
   id: string;
   name: string;
@@ -41,6 +49,13 @@ type Product = {
   barcode: string | null;
   shopping_hidden: boolean;
   is_main: boolean;
+
+  // ✅ nutrition
+  kcal_100g: number | null;
+  kcal_serving: number | null;
+  serving_size_g: number | null;
+  grams_per_unit_g: number | null; // si unité
+  density_g_ml: number | null;     // si ml/l
 };
 
 type StockItem = {
@@ -58,7 +73,8 @@ type Recipe = {
   id: string;
   name: string;
   kind: RecipeKind;
-  ingredients: string[];
+  ingredients: RecipeIngredient[]; // ✅ corrigé
+  servings: number | null;
   tags?: string[];
 };
 
@@ -90,11 +106,15 @@ type WeekMeal = {
   recipe_name: string;
   recipe_kind: RecipeKind | null;
   ingredients: string[] | null;
+  kcal_override: number | null;
   servings: number | null;
   notes: string | null;
 };
 
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
+
+const si = (...names: string[]): RecipeIngredient[] =>
+  names.map((n) => ({ name: n, amount: null, unit: null }));
 
 const SAMPLE_RECIPES: Recipe[] = [
   // SALÉ
@@ -102,35 +122,40 @@ const SAMPLE_RECIPES: Recipe[] = [
     id: 'omelette-fromage',
     name: 'Omelette au fromage',
     kind: 'savory',
-    ingredients: ['oeuf', 'fromage', 'huile', 'sel', 'poivre'],
+    ingredients: si('oeuf', 'fromage', 'huile', 'sel', 'poivre'),
+    servings: null,
     tags: ['rapide'],
   },
   {
     id: 'pates-tomate',
     name: 'Pâtes sauce tomate',
     kind: 'savory',
-    ingredients: ['pates', 'tomate', 'ail', 'huile', 'sel'],
+    ingredients: si('pates', 'tomate', 'ail', 'huile', 'sel'),
+    servings: null,
     tags: ['classique'],
   },
   {
     id: 'riz-legumes-saute',
     name: 'Riz aux légumes sautés',
     kind: 'savory',
-    ingredients: ['riz', 'legume', 'huile', 'ail', 'sauce soja'],
+    ingredients: si('riz', 'legume', 'huile', 'ail', 'sauce soja'),
+    servings: null,
     tags: ['wok'],
   },
   {
     id: 'salade-thon-mais',
     name: 'Salade thon & maïs',
     kind: 'savory',
-    ingredients: ['salade', 'thon', 'mais', 'huile', 'vinaigre'],
+    ingredients: si('salade', 'thon', 'mais', 'huile', 'vinaigre'),
+    servings: null,
     tags: ['frais'],
   },
   {
     id: 'soupe-lentilles',
     name: 'Soupe de lentilles',
     kind: 'savory',
-    ingredients: ['lentille', 'carotte', 'oignon', 'bouillon', 'ail'],
+    ingredients: si('lentille', 'carotte', 'oignon', 'bouillon', 'ail'),
+    servings: null,
     tags: ['batch cooking'],
   },
 
@@ -139,35 +164,40 @@ const SAMPLE_RECIPES: Recipe[] = [
     id: 'pancakes',
     name: 'Pancakes',
     kind: 'sweet',
-    ingredients: ['farine', 'oeuf', 'lait', 'sucre', 'levure'],
+    ingredients: si('farine', 'oeuf', 'lait', 'sucre', 'levure'),
+    servings: null,
     tags: ['petit dej'],
   },
   {
     id: 'bol-yaourt-fruits',
     name: 'Bol yaourt, fruits & granola',
     kind: 'sweet',
-    ingredients: ['yaourt', 'fruit', 'granola', 'miel'],
+    ingredients: si('yaourt', 'fruit', 'granola', 'miel'),
+    servings: null,
     tags: ['frais'],
   },
   {
     id: 'mug-cake-choco',
     name: 'Mug cake chocolat',
     kind: 'sweet',
-    ingredients: ['farine', 'oeuf', 'lait', 'sucre', 'chocolat'],
+    ingredients: si('farine', 'oeuf', 'lait', 'sucre', 'chocolat'),
+    servings: null,
     tags: ['rapide'],
   },
   {
     id: 'compote-pomme-cannelle',
     name: 'Compote pomme cannelle',
     kind: 'sweet',
-    ingredients: ['pomme', 'sucre', 'cannelle', 'citron'],
+    ingredients: si('pomme', 'sucre', 'cannelle', 'citron'),
+    servings: null,
     tags: ['léger'],
   },
   {
     id: 'cookies-choco',
     name: 'Cookies chocolat',
     kind: 'sweet',
-    ingredients: ['farine', 'sucre', 'beurre', 'oeuf', 'chocolat'],
+    ingredients: si('farine', 'sucre', 'beurre', 'oeuf', 'chocolat'),
+    servings: null,
     tags: ['gourmand'],
   },
 ];
@@ -241,6 +271,120 @@ function roundQty(value: number, unit: string | null): number {
   return Math.round(value * 10) / 10;                  // safe (0.1) si besoin
 }
 
+function toNum(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+function gramsFromStock(item: StockItem): { grams: number | null; approx: boolean } {
+  const p = item.product;
+  if (!p) return { grams: null, approx: false };
+
+  const qty = item.quantity ?? 0;
+  const unit = (item.unit ?? 'unité').toLowerCase();
+
+  if (unit === 'g') return { grams: qty, approx: false };
+
+  // litre -> ml -> g (via densité)
+  if (unit === 'l') {
+    const density = p.density_g_ml ?? 1; // si non renseigné, on approx eau
+    const grams = qty * 1000 * density;
+    return { grams, approx: p.density_g_ml == null }; // approx si densité manquante
+  }
+
+  // unité -> grammes via grams_per_unit_g
+  if (unit === 'unité') {
+    if (!p.grams_per_unit_g) return { grams: null, approx: false };
+    return { grams: qty * p.grams_per_unit_g, approx: false };
+  }
+
+  return { grams: null, approx: false };
+}
+
+function kcalForStock(item: StockItem): { kcal: number | null; approx: boolean } {
+  const p = item.product;
+  if (!p?.kcal_100g) return { kcal: null, approx: false };
+
+  const { grams, approx } = gramsFromStock(item);
+  if (grams == null) return { kcal: null, approx: false };
+
+  const kcal = (p.kcal_100g / 100) * grams;
+  return { kcal: Math.round(kcal), approx };
+}
+
+function findProductForIngredient(products: Product[], name: string): Product | null {
+  const key = normalizeText(name);
+  // match simple sur le nom
+  return (
+    products.find((p) => {
+      const pn = normalizeText(p.name);
+      return pn === key || pn.includes(key) || key.includes(pn);
+    }) ?? null
+  );
+}
+
+function kcalForRecipe(recipe: Recipe, products: Product[]): { kcal: number; missingCount: number; approx: boolean } {
+  let total = 0;
+  let missing = 0;
+  let approx = false;
+
+  for (const ing of recipe.ingredients) {
+    if (!ing.amount || !ing.unit) {
+      missing += 1;
+      continue;
+    }
+
+    const p = findProductForIngredient(products, ing.name);
+    if (!p?.kcal_100g) {
+      missing += 1;
+      continue;
+    }
+
+    let grams: number | null = null;
+
+    if (ing.unit === 'g') grams = ing.amount;
+
+    if (ing.unit === 'ml') {
+      const density = p.density_g_ml ?? 1;
+      grams = ing.amount * density;
+      if (p.density_g_ml == null) approx = true;
+    }
+
+    if (ing.unit === 'unité') {
+      if (!p.grams_per_unit_g) {
+        missing += 1;
+        continue;
+      }
+      grams = ing.amount * p.grams_per_unit_g;
+    }
+
+    if (grams == null) {
+      missing += 1;
+      continue;
+    }
+
+    total += (p.kcal_100g / 100) * grams;
+  }
+
+  return { kcal: Math.round(total), missingCount: missing, approx };
+}
+
+function mealCalories(meal: WeekMeal, recipes: Recipe[], products: Product[]): number | null {
+  if (meal.kcal_override != null) return Math.round(meal.kcal_override);
+
+  if (!meal.recipe_id) return null;
+  const r = recipes.find((x) => x.id === meal.recipe_id);
+  if (!r) return null;
+
+  const kcalR = kcalForRecipe(r, products).kcal;
+  const recipeServ = r.servings ?? 1;
+  const mealServ = meal.servings ?? 1;
+
+  // kcal par portion * nb portions
+  return Math.round((kcalR / recipeServ) * mealServ);
+}
+
 function toDateKey(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -261,6 +405,21 @@ function addDays(d: Date, days: number): Date {
   const copy = new Date(d);
   copy.setDate(copy.getDate() + days);
   return copy;
+}
+
+function parseRecipeIngredients(text: string): RecipeIngredient[] {
+  return text
+    .split(',')
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((part) => {
+      // ex: "farine 200 g"
+      const m = part.match(/^(.+?)(?:\s+(\d+(?:[.,]\d+)?))?\s*(g|ml|unité)?$/i);
+      const name = (m?.[1] ?? part).trim();
+      const amount = m?.[2] ? Number(String(m[2]).replace(',', '.')) : null;
+      const unit = (m?.[3]?.toLowerCase() as IngredientUnit) ?? null;
+      return { name, amount: Number.isFinite(amount as any) ? amount : null, unit };
+    });
 }
 
 const navItems: { key: Tab; label: string; icon: string }[] = [
@@ -299,6 +458,11 @@ function App() {
   const [barcode, setBarcode] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
+  const [subCategory, setSubCategory] = useState<SubCategory | ''>(''); // ✅ à la place d'utiliser editSubCategory
+
+  const [kcal100g, setKcal100g] = useState('');
+  const [gramsPerUnit, setGramsPerUnit] = useState('');
+  const [densityGml, setDensityGml] = useState('');
 
   // Recettes DB
   const [dbRecipes, setDbRecipes] = useState<Recipe[]>([]);
@@ -321,9 +485,14 @@ function App() {
 
   const [editSubCategory, setEditSubCategory] = useState<SubCategory | ''>('');
 
+  const [editKcal100g, setEditKcal100g] = useState('');
+  const [editGramsPerUnit, setEditGramsPerUnit] = useState('');
+  const [editDensityGml, setEditDensityGml] = useState('');
+
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekMonday(new Date()));
   const [weekMeals, setWeekMeals] = useState<WeekMeal[]>([]);
   const [weekMealsLoading, setWeekMealsLoading] = useState(false);
+  const [planKcalOverride, setPlanKcalOverride] = useState<string>('');
 
   // modal planning
   const [planOpen, setPlanOpen] = useState(false);
@@ -378,6 +547,9 @@ function App() {
         setEditUnit(item.unit ?? 'unité');
         setEditExpiration(item.expiration_date ?? ''); // '' si null
         setEditBarcode(item.product?.barcode ?? '');
+        setEditKcal100g(item.product?.kcal_100g != null ? String(item.product.kcal_100g) : '');
+        setEditGramsPerUnit(item.product?.grams_per_unit_g != null ? String(item.product.grams_per_unit_g) : '');
+        setEditDensityGml(item.product?.density_g_ml != null ? String(item.product.density_g_ml) : '');
 
         setEditOpen(true);
       };
@@ -406,6 +578,9 @@ function App() {
             ? (editSubCategory || null)
             : null,
         barcode: editBarcode.trim() || null,
+        kcal_100g: editKcal100g ? Number(editKcal100g) : null,
+        grams_per_unit_g: editGramsPerUnit ? Number(editGramsPerUnit) : null,
+        density_g_ml: editDensityGml ? Number(editDensityGml) : null,
       })
       .eq('id', productId);
 
@@ -487,7 +662,7 @@ const fetchWeekMeals = async (start: Date) => {
 
   const { data, error } = await supabase
     .from('week_meals')
-    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, servings, notes')
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes')
     .gte('meal_date', from)
     .lte('meal_date', to)
     .order('meal_date', { ascending: true });
@@ -501,20 +676,33 @@ const fetchWeekMeals = async (start: Date) => {
   }
 
   const normalized: WeekMeal[] = (data ?? []).map((r: any) => ({
-    id: r.id,
-    meal_date: r.meal_date,
-    meal_slot: r.meal_slot as MealSlot,
-    recipe_id: r.recipe_id ?? null,
-    recipe_name: String(r.recipe_name ?? ''),
-    recipe_kind: (r.recipe_kind as RecipeKind) ?? null,
-    ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(String) : null,
-    servings: r.servings ?? null,
-    notes: r.notes ?? null,
-  }));
+  id: r.id,
+  meal_date: r.meal_date,
+  meal_slot: r.meal_slot as MealSlot,
+  recipe_id: r.recipe_id ?? null,
+  recipe_name: String(r.recipe_name ?? ''),
+  recipe_kind: (r.recipe_kind as RecipeKind) ?? null,
+  ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(String) : null,
+  kcal_override: r.kcal_override ?? null,     // ✅ AJOUT
+  servings: r.servings ?? null,
+  notes: r.notes ?? null,
+}));
 
   setWeekMeals(normalized);
   setWeekMealsLoading(false);
 };
+
+useEffect(() => {
+  if (category !== 'Produit sucré' && category !== 'Produit salé') {
+    setSubCategory('');
+  }
+}, [category]);
+
+useEffect(() => {
+  if (editCategory !== 'Produit sucré' && editCategory !== 'Produit salé') {
+    setEditSubCategory('');
+  }
+}, [editCategory]);
 
 useEffect(() => {
   void fetchWeekMeals(weekStart);
@@ -544,7 +732,18 @@ useEffect(() => {
       }
 
       const p = json.product;
+      const kcal100 = toNum(p?.nutriments?.['energy-kcal_100g'] ?? p?.nutriments?.energy_kcal_100g);
+        if (kcal100 != null) setKcal100g(String(kcal100));
 
+        // portion (optionnel)
+        const kcalServing = toNum(p?.nutriments?.['energy-kcal_serving']);
+        const servingQty = toNum(p?.serving_quantity); // souvent en g/ml
+        if (kcalServing != null) {
+          // tu peux garder pour plus tard si tu veux (colonne kcal_serving)
+        }
+        if (servingQty != null) {
+          // tu peux stocker serving_size_g plus tard
+        }
       if (!name && p.product_name) setName(p.product_name);
       if (!brand && p.brands) setBrand(String(p.brands).split(',')[0].trim());
 
@@ -575,10 +774,11 @@ useEffect(() => {
         ingredients: payload.ingredients,
         servings: payload.servings,
         notes: payload.notes,
+        kcal_override: payload.kcal_override,
       },
       { onConflict: 'meal_date,meal_slot' },
     )
-    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, servings, notes')
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes')
     .single();
 
   if (error || !data) {
@@ -595,6 +795,7 @@ useEffect(() => {
     recipe_name: String(data.recipe_name ?? ''),
     recipe_kind: (data.recipe_kind as RecipeKind) ?? null,
     ingredients: Array.isArray(data.ingredients) ? data.ingredients.map(String) : null,
+    kcal_override: data.kcal_override ?? null,  // ✅ AJOUT
     servings: data.servings ?? null,
     notes: data.notes ?? null,
   };
@@ -661,7 +862,8 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
             default_unit,
             barcode,
             shopping_hidden,
-            is_main
+            is_main,
+            kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
         `,
         )
@@ -692,6 +894,11 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
                   barcode: product.barcode ?? null,
                   shopping_hidden: !!product.shopping_hidden,
                   is_main: !!product.is_main,
+                  kcal_100g: product.kcal_100g, 
+                  kcal_serving: product.kcal_serving, 
+                  serving_size_g: product.serving_size_g, 
+                  grams_per_unit_g: product.grams_per_unit_g,
+                  density_g_ml: product.density_g_ml,
                 }
               : null,
           };
@@ -702,7 +909,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
 
       const { data: productsData, error: productsError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`);
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`);
 
       if (productsError) {
         console.error(productsError);
@@ -718,6 +925,11 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
           barcode: p.barcode ?? null,
           shopping_hidden: !!p.shopping_hidden,
           is_main: !!p.is_main,
+          kcal_100g: p.kcal_100g, 
+          kcal_serving: p.kcal_serving, 
+          serving_size_g: p.serving_size_g, 
+          grams_per_unit_g: p.grams_per_unit_g,
+          density_g_ml: p.density_g_ml,
         }));
         setProducts(normalizedProducts);
       }
@@ -735,18 +947,14 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
 
     const { data, error } = await supabase
       .from('recipes')
-      .select(
-        `
+      .select(`
         id,
         name,
         kind,
+        servings,
         created_at,
-        recipe_ingredients (
-          ingredient,
-          position
-        )
-      `,
-      )
+        recipe_ingredients ( ingredient, position, amount, unit )
+      `)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -757,15 +965,20 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
     }
 
     const normalized: Recipe[] = (data ?? []).map((r: any) => {
-      const ingredients = (r.recipe_ingredients ?? [])
+      const ingredients: RecipeIngredient[] = (r.recipe_ingredients ?? [])
         .sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
-        .map((x: any) => String(x.ingredient));
+        .map((x: any) => ({
+          name: String(x.ingredient),
+          amount: x.amount ?? null,
+          unit: (x.unit as IngredientUnit) ?? null,
+        }));
 
       return {
         id: r.id,
         name: r.name,
         kind: r.kind as RecipeKind,
         ingredients,
+        servings: r.servings ?? null,
       };
     });
 
@@ -781,11 +994,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
     const recipeName = newRecipeName.trim();
     if (!recipeName) return;
 
-    const ingredients = newRecipeIngredients
-      .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean);
-
+    const ingredients = parseRecipeIngredients(newRecipeIngredients);
     if (ingredients.length === 0) return;
 
     setError(null);
@@ -794,7 +1003,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
     const { data: recipeRow, error: recipeErr } = await supabase
       .from('recipes')
       .insert({ name: recipeName, kind: newRecipeKind })
-      .select('id, name, kind')
+      .select('id, name, kind, servings')
       .single();
 
     if (recipeErr || !recipeRow) {
@@ -806,8 +1015,10 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
     // 2) create ingredients
     const toInsert = ingredients.map((ing, i) => ({
       recipe_id: recipeRow.id,
-      ingredient: ing,
+      ingredient: ing.name,
       position: i,
+      amount: ing.amount,
+      unit: ing.unit,
     }));
 
     const { error: ingErr } = await supabase.from('recipe_ingredients').insert(toInsert);
@@ -819,8 +1030,13 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
     }
 
     // 3) refresh list
-    setDbRecipes((prev) => [{ id: recipeRow.id, name: recipeRow.name, kind: recipeRow.kind, ingredients }, ...prev]);
-
+    setDbRecipes((prev) => [{
+      id: recipeRow.id,
+      name: recipeRow.name,
+      kind: recipeRow.kind,
+      ingredients,
+      servings: recipeRow.servings ?? null,
+    }, ...prev]);
     setNewRecipeName('');
     setNewRecipeIngredients('');
   };
@@ -846,7 +1062,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
         .from('products')
         .update({ is_main: !currentValue })
         .eq('id', productId)
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .single();
 
       if (error || !data) throw error || new Error('Erreur mise à jour produit');
@@ -861,6 +1077,12 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
         barcode: data.barcode ?? null,
         shopping_hidden: !!data.shopping_hidden,
         is_main: !!data.is_main,
+
+        kcal_100g: data.kcal_100g ?? null,
+        kcal_serving: data.kcal_serving ?? null,
+        serving_size_g: data.serving_size_g ?? null,
+        grams_per_unit_g: data.grams_per_unit_g ?? null,
+        density_g_ml: data.density_g_ml ?? null,
       };
 
       setProducts((prev) => {
@@ -924,7 +1146,7 @@ const unhideFromShopping = async (productId: string) => {
     if (trimmedBarcode) {
       const { data: existingProducts, error: existingProductError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .eq('barcode', trimmedBarcode)
         .limit(1);
 
@@ -939,15 +1161,18 @@ const unhideFromShopping = async (productId: string) => {
           name: name.trim(),
           brand: brand.trim() || null,
           category: category ? category : null,
-          sub_category:
-            category === 'Produit sucré' || category === 'Produit salé'
-              ? (editSubCategory || null)
-              : null,
+          sub_category: (category === 'Produit sucré' || category === 'Produit salé') ? (subCategory || null) : null,
           default_unit: unit.trim() || null,
           barcode: trimmedBarcode || null,
+          shopping_hidden: false,
           is_main: false,
+
+          // ✅ nutrition
+          kcal_100g: kcal100g ? Number(kcal100g) : null,
+          grams_per_unit_g: gramsPerUnit ? Number(gramsPerUnit) : null,
+          density_g_ml: densityGml ? Number(densityGml) : null,
         })
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main`)
+        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .single();
 
       if (productError || !productData) throw productError || new Error('Erreur création produit');
@@ -964,6 +1189,11 @@ const unhideFromShopping = async (productId: string) => {
       barcode: productRow.barcode ?? null,
       shopping_hidden: !!productRow.shopping_hidden,
       is_main: !!productRow.is_main,
+      kcal_100g: productRow.kcal_100g, 
+      kcal_serving: productRow.kcal_serving, 
+      serving_size_g: productRow.serving_size_g, 
+      grams_per_unit_g: productRow.grams_per_unit_g,
+      density_g_ml: productRow.density_g_ml,
     };
 
     setProducts((prev) => {
@@ -1007,7 +1237,7 @@ const unhideFromShopping = async (productId: string) => {
           `
           id, place, quantity, unit, expiration_date,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main
+            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
         `,
         )
@@ -1029,7 +1259,7 @@ const unhideFromShopping = async (productId: string) => {
           `
           id, place, quantity, unit, expiration_date,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main
+            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
         `,
         )
@@ -1049,18 +1279,24 @@ const unhideFromShopping = async (productId: string) => {
       unit: finalStockRow.unit,
       expiration_date: finalStockRow.expiration_date,
       product: product
-        ? {
-            id: product.id,
-            name: product.name,
-            brand: product.brand,
-            category: product.category,
-            sub_category: product.sub_category ?? null,
-            default_unit: product.default_unit,
-            barcode: product.barcode ?? null,
-            shopping_hidden: !!product.shopping_hidden,
-            is_main: !!product.is_main,
-          }
-        : null,
+      ? {
+          id: product.id,
+          name: product.name,
+          brand: product.brand,
+          category: product.category,
+          sub_category: product.sub_category ?? null,
+          default_unit: product.default_unit,
+          barcode: product.barcode ?? null,
+          shopping_hidden: !!product.shopping_hidden,
+          is_main: !!product.is_main,
+
+          kcal_100g: product.kcal_100g ?? null,
+          kcal_serving: product.kcal_serving ?? null,
+          serving_size_g: product.serving_size_g ?? null,
+          grams_per_unit_g: product.grams_per_unit_g ?? null,
+          density_g_ml: product.density_g_ml ?? null,
+        }
+      : null,
     };
 
     setStocks((prev) => {
@@ -1080,6 +1316,10 @@ const unhideFromShopping = async (productId: string) => {
     setUnit('unité');
     setExpiration('');
     setBarcode('');
+    setSubCategory('');
+    setKcal100g('');
+    setGramsPerUnit('');
+    setDensityGml('');
   } catch (err) {
     console.error(err);
     setError("Erreur lors de l'ajout du produit");
@@ -1103,41 +1343,50 @@ const unhideFromShopping = async (productId: string) => {
 
     const category = recipeKindToCategory(kind);
 
-const { data: created, error: createError } = await supabase
-  .from('products')
-  .insert({
-    name: keyword,
-    brand: null,
-    category,            // ✅ utilise kind indirectement
-    sub_category: null,
-    default_unit: null,
-    barcode: null,
-    is_main: false,
-  })
-  .select('id, name, brand, category, sub_category, default_unit, barcode, shopping_hidden,is_main')
-  .single();
+    const { data: created, error: createError } = await supabase
+      .from('products')
+      .insert({
+        name: keyword,
+        brand: null,
+        category,
+        sub_category: null,
+        default_unit: null,
+        barcode: null,
+        shopping_hidden: false,
+        is_main: false,
 
-if (createError || !created) throw createError || new Error('Erreur création produit');
+        // nutrition inconnue
+        kcal_100g: null,
+        kcal_serving: null,
+        serving_size_g: null,
+        grams_per_unit_g: null,
+        density_g_ml: null,
+      })
+      .select('id, name, brand, category, sub_category, default_unit, barcode, shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml')
+      .single();
 
-const normalized: Product = {
-  id: created.id,
-  name: created.name,
-  brand: created.brand,
-  category: created.category,
-  sub_category: created.sub_category ?? null,   // ✅ obligatoire
-  default_unit: created.default_unit,
-  barcode: created.barcode ?? null,
-  shopping_hidden: !!created.shopping_hidden,
-  is_main: !!created.is_main,
-};
+    if (createError || !created) throw createError || new Error('Erreur création produit');
 
-setProducts((prev) => [...prev, normalized]);
-return { product: normalized, created: true };
+    const normalized: Product = {
+      id: created.id,
+      name: created.name,
+      brand: created.brand,
+      category: created.category,
+      sub_category: created.sub_category ?? null,
+      default_unit: created.default_unit,
+      barcode: created.barcode ?? null,
+      shopping_hidden: !!created.shopping_hidden,
+      is_main: !!created.is_main,
+      kcal_100g: created.kcal_100g ?? null,
+      kcal_serving: created.kcal_serving ?? null,
+      serving_size_g: created.serving_size_g ?? null,
+      grams_per_unit_g: created.grams_per_unit_g ?? null,
+      density_g_ml: created.density_g_ml ?? null,
+    };
 
     setProducts((prev) => [...prev, normalized]);
     return { product: normalized, created: true };
   };
-
   const addMissingIngredientsToShopping = async (missing: string[], kind: RecipeKind) => {
     if (!missing || missing.length === 0) return;
 
@@ -1325,6 +1574,7 @@ const renderWeekMenuTab = () => {
 
     setPlanDate(dateKey);
     setPlanSlot(slot);
+    setPlanKcalOverride(existing?.kcal_override != null ? String(existing.kcal_override) : '');
 
     if (existing) {
       // pré-remplir
@@ -1362,19 +1612,21 @@ const renderWeekMenuTab = () => {
       const r = allRecipes.find((x) => x.id === recipe_id);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ?? null;
+      ingredients = r?.ingredients ? r.ingredients.map((i) => i.name) : null;
     } else if (v.startsWith('sample:')) {
       const rid = v.slice(7);
       const r = allRecipes.find((x) => x.id === rid);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ?? null;
+      ingredients = r?.ingredients ? r.ingredients.map((i) => i.name) : null;
       // pas de recipe_id en DB pour les samples => on stocke un snapshot
       recipe_id = null;
     }
 
     const servingsNum = Number(planServings);
     const servings = Number.isFinite(servingsNum) ? servingsNum : null;
+    const kcalOverrideNum = Number(planKcalOverride);
+    const kcal_override = Number.isFinite(kcalOverrideNum) ? kcalOverrideNum : null;
 
     await upsertWeekMeal({
       meal_date: planDate,
@@ -1385,6 +1637,7 @@ const renderWeekMenuTab = () => {
       ingredients,
       servings,
       notes: planNotes.trim() || null,
+      kcal_override,
     });
 
     setPlanOpen(false);
@@ -1477,7 +1730,6 @@ const renderWeekMenuTab = () => {
                 </div>
               ))}
             </div>
-
             {MEAL_SLOTS.map((slot) => (
               <div key={slot.key} className="week-row">
                 <div className="week-cell week-cell--slot">{slot.label}</div>
@@ -1498,6 +1750,10 @@ const renderWeekMenuTab = () => {
                       ) : (
                         <div className="meal-mini">
                           <div className="meal-mini-title">{cell.recipe_name}</div>
+                          {(() => {
+                            const kcal = mealCalories(cell, dbRecipes, products);
+                            return kcal != null ? <div className="meal-mini-meta">🔥 {kcal} kcal</div> : null;
+                          })()}
                           <div className="meal-mini-meta">
                             {cell.servings ? `${cell.servings} pers.` : ''}
                             {cell.notes ? ` · ${cell.notes}` : ''}
@@ -1532,6 +1788,16 @@ const renderWeekMenuTab = () => {
                 Planifier — {planDate} · {MEAL_SLOTS.find((s) => s.key === planSlot)?.label}
               </h3>
               <button type="button" className="modal-close" onClick={() => setPlanOpen(false)}>✕</button>
+            </div>
+
+            <div className="field-group">
+              <label className="field-label">Calories (optionnel)</label>
+              <input
+                className="field-input"
+                value={planKcalOverride}
+                onChange={(e) => setPlanKcalOverride(e.target.value)}
+                placeholder="ex: 650"
+              />
             </div>
 
             <div className="form-grid" style={{ marginTop: '0.6rem' }}>
@@ -1656,6 +1922,7 @@ const renderStockTab = () => {
             const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
             const status = getExpirationStatus(expDate, settings.soonDays);
             const labelStatus = getExpirationLabel(status);
+            const kcalInfo = kcalForStock(item);
 
             return (
               <tr key={item.id}>
@@ -1663,6 +1930,11 @@ const renderStockTab = () => {
                   <div className="product-cell">
                     <span className="product-name">{item.product?.name ?? 'Produit'}</span>
                     {item.product?.brand && <span className="product-brand">{item.product.brand}</span>}
+                    {kcalInfo.kcal != null && (
+                      <span className="product-brand">
+                        🔥 {kcalInfo.approx ? '≈ ' : ''}{kcalInfo.kcal} kcal restantes
+                      </span>
+                    )}
                   </div>
                 </td>
 
@@ -1677,7 +1949,6 @@ const renderStockTab = () => {
                     '-'
                   )}
                 </td>
-
                 <td>{item.place || '-'}</td>
 
                 <td>
@@ -1933,7 +2204,35 @@ const renderStockTab = () => {
               </button>
             </div>
           </div>
+          <div className="field-group">
+            <label className="field-label">kcal / 100g</label>
+            <input
+              className="field-input"
+              value={kcal100g}
+              onChange={(e) => setKcal100g(e.target.value)}
+              placeholder="ex: 250"
+            />
+          </div>
 
+          <div className="field-group">
+            <label className="field-label">Grammes par unité (si unité)</label>
+            <input
+              className="field-input"
+              value={gramsPerUnit}
+              onChange={(e) => setGramsPerUnit(e.target.value)}
+              placeholder="ex: 125"
+            />
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Densité g/ml (si liquide)</label>
+            <input
+              className="field-input"
+              value={densityGml}
+              onChange={(e) => setDensityGml(e.target.value)}
+              placeholder="ex: 1.00"
+            />
+          </div>
           <div className="field-group">
             <label className="field-label">Marque</label>
             <input
@@ -1964,8 +2263,8 @@ const renderStockTab = () => {
               <label className="field-label">Sous-catégorie</label>
               <select
                 className="field-input"
-                value={editSubCategory}
-                onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
+                value={subCategory}
+                onChange={(e) => setSubCategory(e.target.value as SubCategory | '')}
               >
                 <option value="">(Aucune)</option>
                 {SUB_CATEGORIES.map((sc) => (
@@ -2256,7 +2555,9 @@ const renderStockTab = () => {
     const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
 
     const enriched = allRecipes.map((r) => {
-      const missing = r.ingredients.filter((ing) => !hasIngredient(ing));
+      const missing = r.ingredients
+        .filter((ing: RecipeIngredient) => !hasIngredient(ing.name))
+        .map((ing: RecipeIngredient) => ing.name);
       const missingCount = missing.length;
       const feasible = missingCount <= settings.recipesMaxMissing;
       return { ...r, missing, missingCount, feasible };
@@ -2281,7 +2582,7 @@ const renderStockTab = () => {
     const renderRecipeCard = (r: any) => {
       const badge = `🧾 ${r.missingCount} manquant(s)`;
       const isDbRecipe = dbRecipes.some((x) => x.id === r.id); // permet d'afficher "supprimer" seulement sur DB
-
+      const kcalR = kcalForRecipe(r, products);
       return (
         <div key={r.id} className="recipe-card">
           <div className="recipe-head">
@@ -2305,17 +2606,22 @@ const renderStockTab = () => {
 
           <p className="recipe-subtitle">Ingrédients :</p>
           <ul className="recipe-list">
-            {r.ingredients.map((ing: string) => {
-              const ok = hasIngredient(ing);
+            {r.ingredients.map((ing: RecipeIngredient) => {
+              const ok = hasIngredient(ing.name);
               return (
-                <li key={ing} className={ok ? 'ing-ok' : 'ing-missing'} title={ok ? 'Disponible' : 'Manquant'}>
+                <li key={`${r.id}-${ing.name}`} className={ok ? 'ing-ok' : 'ing-missing'}>
                   {ok ? '✅ ' : '❌ '}
-                  {ing}
+                  {ing.name}
+                  {ing.amount != null && ing.unit ? ` — ${ing.amount} ${ing.unit}` : ''}
                 </li>
               );
             })}
           </ul>
-
+          
+          <div className="recipe-meta">
+            🔥 {kcalR.approx ? '≈ ' : ''}{kcalR.kcal} kcal
+            {kcalR.missingCount > 0 ? ` · (${kcalR.missingCount} ingrédient(s) non calculés)` : ''}
+          </div>
           {recipesSubTab === 'feasible' && r.missingCount > 0 && (
             <div className="recipe-actions">
               <button
