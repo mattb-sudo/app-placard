@@ -17,19 +17,21 @@ const MAIN_CATEGORIES = [
 
 type MainCategory = (typeof MAIN_CATEGORIES)[number];
 
-const SUB_CATEGORIES = [
-  'Condiments',
-  'Fruits',
-  'Légumes',
-  'Boisson chaude',
-  'Boisson',
-  'Frais',
-  'Apéro',
-  'Conserve',
-  'Vrac',
-] as const;
+const SUBCATS = {
+  'Produit sucré': ['Thé', 'Déjeuner', 'Pâtisserie', 'Chocolat', 'Fruits sec', 'Boisson'],
+  'Produit salé': ['Conserve', 'Poisson', 'Condiment', 'Asiatique', 'Soupe', 'Vrac', 'Apéro'],
+  'Produit de santé': ['Pansement', 'Médicament', 'Matériel', 'Complément'],
+  'Produit ménager': ['Toilettes', 'Surface', 'Sol', 'Vitre', 'Vaisselle', 'Lessive', 'Bricolage', 'Sacs'],
+} as const;
 
-type SubCategory = (typeof SUB_CATEGORIES)[number];
+// Type = union de toutes les sous-catégories possibles
+type SubCategory =
+  (typeof SUBCATS)[keyof typeof SUBCATS][number];
+
+// helper
+function getSubcatsFor(cat: MainCategory | ''): readonly string[] {
+  return (SUBCATS as any)[cat] ?? [];
+}
 
 type IngredientUnit = 'g' | 'ml' | 'unité';
 
@@ -573,10 +575,7 @@ function App() {
         name: editName.trim(),
         brand: editBrand.trim() || null,
         category: editCategory ? editCategory : null,
-        sub_category:
-          editCategory === 'Produit sucré' || editCategory === 'Produit salé'
-            ? (editSubCategory || null)
-            : null,
+        sub_category: getSubcatsFor(editCategory).length > 0 ? (editSubCategory || null) : null,
         barcode: editBarcode.trim() || null,
         kcal_100g: editKcal100g ? Number(editKcal100g) : null,
         grams_per_unit_g: editGramsPerUnit ? Number(editGramsPerUnit) : null,
@@ -713,6 +712,17 @@ useEffect(() => {
     setEditSubCategory('');
   }
 }, [category]);
+
+useEffect(() => {
+  // si la catégorie ne supporte pas de sous-cat, on vide
+  if (getSubcatsFor(category).length === 0) setSubCategory('');
+  else if (subCategory && !getSubcatsFor(category).includes(subCategory)) setSubCategory('');
+}, [category]);
+
+useEffect(() => {
+  if (getSubcatsFor(editCategory).length === 0) setEditSubCategory('');
+  else if (editSubCategory && !getSubcatsFor(editCategory).includes(editSubCategory)) setEditSubCategory('');
+}, [editCategory]);
 
   // ---------- OFF autofill ----------
   const autofillFromBarcode = async (code: string) => {
@@ -1161,7 +1171,7 @@ const unhideFromShopping = async (productId: string) => {
           name: name.trim(),
           brand: brand.trim() || null,
           category: category ? category : null,
-          sub_category: (category === 'Produit sucré' || category === 'Produit salé') ? (subCategory || null) : null,
+          sub_category: getSubcatsFor(category).length > 0 ? (subCategory || null) : null,
           default_unit: unit.trim() || null,
           barcode: trimmedBarcode || null,
           shopping_hidden: false,
@@ -1897,9 +1907,9 @@ const hideFromShopping = async (productId: string) => {
   // ---------- Tabs ----------
 const renderStockTab = () => {
   const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
-  label: cat,
-  items: inStock.filter((s) => s.product?.category === cat),
-}));
+    label: cat,
+    items: inStock.filter((s) => s.product?.category === cat),
+  }));
 
   const renderRowsTable = (rows: StockItem[]) => (
     <div className="table-wrapper" style={{ maxHeight: 360 }}>
@@ -1916,6 +1926,7 @@ const renderStockTab = () => {
             <th>Actions</th>
           </tr>
         </thead>
+
         <tbody>
           {rows.map((item) => {
             const expDate = item.expiration_date;
@@ -1928,11 +1939,18 @@ const renderStockTab = () => {
               <tr key={item.id}>
                 <td>
                   <div className="product-cell">
-                    <span className="product-name">{item.product?.name ?? 'Produit'}</span>
-                    {item.product?.brand && <span className="product-brand">{item.product.brand}</span>}
+                    <span className="product-name">
+                      {item.product?.name ?? 'Produit'}
+                    </span>
+
+                    {item.product?.brand && (
+                      <span className="product-brand">{item.product.brand}</span>
+                    )}
+
                     {kcalInfo.kcal != null && (
                       <span className="product-brand">
-                        🔥 {kcalInfo.approx ? '≈ ' : ''}{kcalInfo.kcal} kcal restantes
+                        🔥 {kcalInfo.approx ? '≈ ' : ''}
+                        {kcalInfo.kcal} kcal restantes
                       </span>
                     )}
                   </div>
@@ -1943,12 +1961,15 @@ const renderStockTab = () => {
                     <input
                       type="checkbox"
                       checked={item.product.is_main}
-                      onChange={() => handleToggleMain(item.product!.id, item.product!.is_main)}
+                      onChange={() =>
+                        handleToggleMain(item.product!.id, item.product!.is_main)
+                      }
                     />
                   ) : (
                     '-'
                   )}
                 </td>
+
                 <td>{item.place || '-'}</td>
 
                 <td>
@@ -1999,7 +2020,12 @@ const renderStockTab = () => {
                 </td>
 
                 <td>
-                  <button type="button" className="btn-tertiary" onClick={() => openEdit(item)} title="Modifier">
+                  <button
+                    type="button"
+                    className="btn-tertiary"
+                    onClick={() => openEdit(item)}
+                    title="Modifier"
+                  >
                     ✏️
                   </button>
                 </td>
@@ -2011,12 +2037,57 @@ const renderStockTab = () => {
     </div>
   );
 
+  const renderCategoryContent = (label: MainCategory, items: StockItem[]) => {
+    if (items.length === 0) {
+      return (
+        <p className="muted" style={{ marginTop: '0.5rem' }}>
+          Aucun élément dans cette catégorie.
+        </p>
+      );
+    }
+
+    const subcats = getSubcatsFor(label);
+
+    // pas de sous-catégories => table directe
+    if (subcats.length === 0) return renderRowsTable(items);
+
+    // sous-catégories => on n'affiche que celles qui ont au moins 1 produit
+    const blocks = subcats
+      .map((sc) => {
+        const rows = items.filter((it) => (it.product?.sub_category ?? '') === sc);
+        if (rows.length === 0) return null;
+
+        return (
+          <div key={sc} className="subcat-block">
+            <h3 className="subcat-title">{sc}</h3>
+            {renderRowsTable(rows)}
+          </div>
+        );
+      })
+      .filter(Boolean);
+
+    // "Autres" = sans sous-catégorie
+    const others = items.filter((it) => !it.product?.sub_category);
+    if (others.length > 0) {
+      blocks.push(
+        <div key="Autres" className="subcat-block">
+          <h3 className="subcat-title">Autres</h3>
+          {renderRowsTable(others)}
+        </div>,
+      );
+    }
+
+    return <>{blocks}</>;
+  };
+
   return (
     <>
       <div className="main-header">
         <div>
           <h1 className="main-title">Placards & frigo</h1>
-          <p className="main-subtitle">Inventaire détaillé rangé par grandes catégories.</p>
+          <p className="main-subtitle">
+            Inventaire détaillé rangé par grandes catégories.
+          </p>
         </div>
         <div className="main-header-right">
           <span className="tag">Inventaire</span>
@@ -2027,60 +2098,24 @@ const renderStockTab = () => {
         <section className="card">
           <p>Chargement...</p>
         </section>
-      ) : stocks.length === 0 ? (
+      ) : inStock.length === 0 ? (
         <section className="card">
           <p className="muted">Aucun produit en stock pour l’instant.</p>
         </section>
       ) : (
         <section className="category-grid">
-          {groupedByCategory.map(({ label, items }) => {
-            const isSweetOrSavory = label === 'Produit sucré' || label === 'Produit salé';
+          {groupedByCategory.map(({ label, items }) => (
+            <section key={label} className="card">
+              <div className="category-head">
+                <h2 className="section-title" style={{ margin: 0 }}>
+                  {label}
+                </h2>
+                <span className="category-count">{items.length}</span>
+              </div>
 
-            return (
-              <section key={label} className="card">
-                <div className="category-head">
-                  <h2 className="section-title" style={{ margin: 0 }}>
-                    {label}
-                  </h2>
-                  <span className="category-count">{items.length}</span>
-                </div>
-
-                {items.length === 0 ? (
-                  <p className="muted" style={{ marginTop: '0.5rem' }}>
-                    Aucun élément dans cette catégorie.
-                  </p>
-                ) : isSweetOrSavory ? (
-                  <>
-                    {SUB_CATEGORIES.map((sc) => {
-                      const rows = items.filter((it) => (it.product?.sub_category ?? '') === sc);
-                      if (rows.length === 0) return null;
-
-                      return (
-                        <div key={sc} className="subcat-block">
-                          <h3 className="subcat-title">{sc}</h3>
-                          {renderRowsTable(rows)}
-                        </div>
-                      );
-                    })}
-
-                    {/* Optionnel : "Autres" */}
-                    {(() => {
-                      const others = items.filter((it) => !it.product?.sub_category);
-                      if (others.length === 0) return null;
-                      return (
-                        <div className="subcat-block">
-                          <h3 className="subcat-title">Autres</h3>
-                          {renderRowsTable(others)}
-                        </div>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  renderRowsTable(items)
-                )}
-              </section>
-            );
-          })}
+              {renderCategoryContent(label, items)}
+            </section>
+          ))}
         </section>
       )}
     </>
@@ -2258,7 +2293,7 @@ const renderStockTab = () => {
               ))}
             </select>
           </div>
-          {(category === 'Produit sucré' || category === 'Produit salé') && (
+          {getSubcatsFor(category).length > 0 && (
             <div className="field-group">
               <label className="field-label">Sous-catégorie</label>
               <select
@@ -2267,7 +2302,7 @@ const renderStockTab = () => {
                 onChange={(e) => setSubCategory(e.target.value as SubCategory | '')}
               >
                 <option value="">(Aucune)</option>
-                {SUB_CATEGORIES.map((sc) => (
+                {getSubcatsFor(category).map((sc) => (
                   <option key={sc} value={sc}>
                     {sc}
                   </option>
@@ -2821,24 +2856,23 @@ const renderStockTab = () => {
           <label className="field-label">Lieu</label>
           <input className="field-input" value={editPlace} onChange={(e) => setEditPlace(e.target.value)} />
         </div>
-        {(editCategory === 'Produit sucré' || editCategory === 'Produit salé') && (
-  <div className="field-group">
-    <label className="field-label">Sous-catégorie</label>
-    <select
-      className="field-input"
-      value={editSubCategory}
-      onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
-    >
-      <option value="">(Aucune)</option>
-      {SUB_CATEGORIES.map((sc) => (
-        <option key={sc} value={sc}>
-          {sc}
-        </option>
-      ))}
-    </select>
-  </div>
-)}
-
+        {getSubcatsFor(editCategory).length > 0 && (
+          <div className="field-group">
+            <label className="field-label">Sous-catégorie</label>
+            <select
+              className="field-input"
+              value={editSubCategory}
+              onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
+            >
+              <option value="">(Aucune)</option>
+              {getSubcatsFor(editCategory).map((sc) => (
+                <option key={sc} value={sc}>
+                  {sc}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="field-group">
           <label className="field-label">Quantité</label>
           <input className="field-input" value={editQty} onChange={(e) => setEditQty(e.target.value)} />
