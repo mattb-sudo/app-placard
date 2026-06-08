@@ -1494,6 +1494,22 @@ const lowStockList = inStock
   .filter((item) => (item.quantity ?? 0) <= stepForUnit(item.unit))
   .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? ''));
 
+
+const priorityList = inStock
+  .filter((item) => {
+    const status = getExpirationStatus(item.expiration_date, settings.soonDays);
+    return status === 'expired' || status === 'soon';
+  })
+  .sort((a, b) => {
+    const statusA = getExpirationStatus(a.expiration_date, settings.soonDays);
+    const statusB = getExpirationStatus(b.expiration_date, settings.soonDays);
+
+    if (statusA !== statusB) return statusA === 'expired' ? -1 : 1;
+    return (a.expiration_date ?? '').localeCompare(b.expiration_date ?? '');
+  })
+  .slice(0, 6);
+
+
 const changeQuantity = async (item: StockItem, direction: 1 | -1) => {
   const current = item.quantity ?? 0;
   const step = stepForUnit(item.unit);
@@ -2188,6 +2204,38 @@ const renderStockTab = () => {
         </div>
       </section>
 
+      <section className="card card-soft">
+        <h2 className="section-title">À consommer en priorité</h2>
+        <p className="section-subtitle">Les produits les plus urgents à utiliser.</p>
+
+        {priorityList.length === 0 ? (
+          <p className="muted">Aucune urgence pour le moment.</p>
+        ) : (
+          <ul className="priority-list">
+            {priorityList.map((item) => {
+              const status = getExpirationStatus(item.expiration_date, settings.soonDays);
+              const labelStatus = getExpirationLabel(status);
+
+              return (
+                <li key={item.id} className="priority-item">
+                  <div className="priority-product">
+                    <span className="priority-title">{item.product?.name ?? 'Produit'}</span>
+                    <span className="priority-meta">
+                      {item.place || 'Lieu non précisé'} · {item.quantity ?? 0} {item.unit ?? 'unité'}
+                    </span>
+                  </div>
+
+                  <span className={`status-pill status-${status}`}>
+                    <span className="status-dot" />
+                    {labelStatus}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+      
       {/* Détails péremption */}
       <section className="dashboard-grid">
         <section className="card card-soft">
