@@ -377,6 +377,12 @@ body {
   margin-top: 0.1rem;
 }
 
+.date-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 /* Boutons */
 
 .btn-primary {

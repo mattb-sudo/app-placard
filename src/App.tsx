@@ -409,6 +409,16 @@ function addDays(d: Date, days: number): Date {
   return copy;
 }
 
+function addMonths(d: Date, months: number): Date {
+  const copy = new Date(d);
+  copy.setMonth(copy.getMonth() + months);
+  return copy;
+}
+
+function endOfYear(d: Date): Date {
+  return new Date(d.getFullYear(), 11, 31);
+}
+
 function parseRecipeIngredients(text: string): RecipeIngredient[] {
   return text
     .split(',')
@@ -2414,6 +2424,24 @@ const renderStockTab = () => {
               onChange={(e) => setExpiration(e.target.value)}
               className="field-input"
             />
+
+            <div className="date-shortcuts">
+              <button type="button" className="btn-tertiary" onClick={() => setExpiration(toDateKey(addMonths(new Date(), 1)))}>
+                +1 mois
+              </button>
+              <button type="button" className="btn-tertiary" onClick={() => setExpiration(toDateKey(addMonths(new Date(), 3)))}>
+                +3 mois
+              </button>
+              <button type="button" className="btn-tertiary" onClick={() => setExpiration(toDateKey(addMonths(new Date(), 6)))}>
+                +6 mois
+              </button>
+              <button type="button" className="btn-tertiary" onClick={() => setExpiration(toDateKey(endOfYear(new Date())))}>
+                Fin d'année
+              </button>
+              <button type="button" className="btn-tertiary" onClick={() => setExpiration('')}>
+                Inconnu
+              </button>
+            </div>
           </div>
 
           <div className="form-actions">
