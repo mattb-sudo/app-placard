@@ -2463,21 +2463,24 @@ const renderStockTab = () => {
 
 
   const renderShoppingTab = () => {
-    const presentProductIds = new Set(
-  inStock.filter((s) => s.product?.id).map((s) => s.product!.id),
+    const lowStockProductIds = new Set(
+  lowStockList.filter((s) => s.product?.id).map((s) => s.product!.id),
 );
 
-  const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
-  const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+const presentProductIds = new Set(inStock
+    .filter((s) => s.product?.id && !lowStockProductIds.has(s.product.id))
+    .map((s) => s.product!.id),
+);
 
-
+const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
 
     const title = shoppingSubTab === 'main' ? 'Aliments principaux manquants' : 'Autres aliments manquants';
     const subtitle =
       shoppingSubTab === 'main'
-        ? 'Les aliments marqués comme importants mais absents de tes stocks.'
-        : 'Les aliments connus mais absents de tes stocks.';
+        ? 'Les aliments importants absents ou bientôt à racheter.'
+        : 'Les aliments connus absents ou bientôt à racheter.';
 
     const grouped: { [key: string]: Product[] } = {};
     for (const p of currentList) {
