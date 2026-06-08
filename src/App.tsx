@@ -1480,6 +1480,10 @@ const todayCalories = todayMeals.reduce((total, item) => {
   return total + (kcal ?? 0);
 }, 0);
 
+const lowStockList = inStock
+  .filter((item) => (item.quantity ?? 0) <= stepForUnit(item.unit))
+  .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? ''));
+
 const changeQuantity = async (item: StockItem, direction: 1 | -1) => {
   const current = item.quantity ?? 0;
   const step = stepForUnit(item.unit);
@@ -2244,6 +2248,26 @@ const renderStockTab = () => {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+      
+      <section className="card">
+        <h2 className="section-title">Stock faible</h2>
+        <p className="section-subtitle">Produits à racheter ou surveiller.</p>
+
+        {lowStockList.length === 0 ? (
+          <p className="muted">Aucun stock faible détecté.</p>
+        ) : (
+          <div className="chips-row">
+            {lowStockList.map((item) => (
+              <div key={item.id} className="chip">
+                <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
+                <span className="chip-meta">
+                  {item.quantity ?? 0} {item.unit ?? 'unité'}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 
