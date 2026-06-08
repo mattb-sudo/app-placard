@@ -435,7 +435,7 @@ const navItems: { key: Tab; label: string; icon: string }[] = [
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('stock');
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shoppingSubTab, setShoppingSubTab] = useState<'main' | 'others'>('main');
@@ -2120,7 +2120,7 @@ const renderStockTab = () => {
       )}
     </>
   );
-};
+}; 
 
 
     const renderDashboard = () => (
