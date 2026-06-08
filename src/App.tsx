@@ -1467,6 +1467,19 @@ const expiredList = inStock
   return data;
 };
 
+const todayKey = toDateKey(new Date());
+
+const todayMeals = MEAL_SLOTS.map((slot) => ({
+  slot,
+  meal: weekMeals.find((meal) => meal.meal_date === todayKey && meal.meal_slot === slot.key) ?? null,
+}));
+
+const todayCalories = todayMeals.reduce((total, item) => {
+  if (!item.meal) return total;
+  const kcal = mealCalories(item.meal, dbRecipes, products);
+  return total + (kcal ?? 0);
+}, 0);
+
 const changeQuantity = async (item: StockItem, direction: 1 | -1) => {
   const current = item.quantity ?? 0;
   const step = stepForUnit(item.unit);
@@ -2154,6 +2167,11 @@ const renderStockTab = () => {
           <div className="stat-value danger">{expiredItems}</div>
           <div className="stat-foot">À vérifier rapidement</div>
         </div>
+        <div className="stat-card">
+          <div className="stat-label">Calories aujourd'hui</div>
+          <div className="stat-value">{todayCalories}</div>
+          <div className="stat-foot">Repas planifiés</div>
+        </div>
       </section>
 
       {/* Détails péremption */}
@@ -2203,6 +2221,30 @@ const renderStockTab = () => {
             </div>
           )}
         </section>
+      </section>
+      
+      <section className="card">
+        <h2 className="section-title">Repas du jour</h2>
+        <p className="section-subtitle">Ce qui est prévu aujourd'hui.</p>
+
+        {todayMeals.every(({ meal }) => !meal) ? (
+          <p className="muted">Aucun repas planifié aujourd'hui.</p>
+        ) : (
+          <ul className="dashboard-meal-list">
+            {todayMeals.map(({ slot, meal }) => (
+              <li key={slot.key} className="dashboard-meal-item">
+                <span className="dashboard-meal-slot">{slot.label}</span>
+                <span className="dashboard-meal-name">{meal?.recipe_name ?? '-'}</span>
+                {meal && (() => {
+                  const kcal = mealCalories(meal, dbRecipes, products);
+                  return kcal != null ? (
+                    <span className="dashboard-meal-kcal">{kcal} kcal</span>
+                  ) : null;
+                })()}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {/* Ajout produit */}
