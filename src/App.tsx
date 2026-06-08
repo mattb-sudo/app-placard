@@ -2464,16 +2464,23 @@ const renderStockTab = () => {
 
   const renderShoppingTab = () => {
     const lowStockProductIds = new Set(
-  lowStockList.filter((s) => s.product?.id).map((s) => s.product!.id),
-);
+      lowStockList.filter((s) => s.product?.id).map((s) => s.product!.id),
+    );
 
-const presentProductIds = new Set(inStock
-    .filter((s) => s.product?.id && !lowStockProductIds.has(s.product.id))
-    .map((s) => s.product!.id),
-);
+    const lowStockByProductId = new Map(
+      lowStockList
+        .filter((s) => s.product?.id)
+        .map((s) => [s.product!.id, s]),
+    );
 
-const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
-const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+    const presentProductIds = new Set(
+      inStock
+        .filter((s) => s.product?.id && !lowStockProductIds.has(s.product.id))
+        .map((s) => s.product!.id),
+    );
+
+    const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
+    const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
 
     const title = shoppingSubTab === 'main' ? 'Aliments principaux manquants' : 'Autres aliments manquants';
@@ -2542,6 +2549,9 @@ const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden &&
                       <li key={p.id} className="shopping-list-item">
                         <span className="shopping-product-name">{p.name}</span>
                         {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
+                        <span className="shopping-product-reason">
+                          {lowStockByProductId.has(p.id) ? 'Stock faible' : 'Absent'}
+                        </span>
                         <button
                           type="button"
                           className="btn-tertiary"

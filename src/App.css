@@ -738,6 +738,14 @@ body {
   color: var(--muted);
 }
 
+.shopping-product-reason {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+}
 /* Cartes recettes */
 
 .recipe-grid {
