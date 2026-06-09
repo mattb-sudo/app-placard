@@ -1483,6 +1483,12 @@ const soonList = inStock
   .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
 const expiredList = inStock
+  .filter((i) => i.expiration_type === 'dlc')
+  .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired')
+  .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
+
+const ddmExceededList = inStock
+  .filter((i) => i.expiration_type === 'ddm')
   .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired')
   .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
