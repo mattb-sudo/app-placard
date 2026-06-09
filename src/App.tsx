@@ -1530,50 +1530,6 @@ const ddmExceededList = inStock
 
   const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date' | 'expiration_type'>>) => {
   setError(null);
-  
-  async function decrementStockForMeal(meal: WeekMeal): Promise<number> {
-    if (!meal.ingredients || meal.ingredients.length === 0) return 0;
-
-    let decrementedCount = 0;
-    const usedStockIds = new Set<string>();
-
-    for (const ingredient of meal.ingredients) {
-      const key = normalizeText(ingredient);
-      if (!key) continue;
-
-      const candidates = stocks
-        .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name && !usedStockIds.has(s.id))
-        .filter((s) => {
-          const productName = normalizeText(s.product!.name);
-          return productName.includes(key) || key.includes(productName);
-        })
-        .sort((a, b) => {
-          const statusA = getExpirationStatus(a.expiration_date, settings.soonDays);
-          const statusB = getExpirationStatus(b.expiration_date, settings.soonDays);
-
-          const score = (status: ExpirationStatus) =>
-            status === 'expired' ? 0 : status === 'soon' ? 1 : 2;
-
-          if (score(statusA) !== score(statusB)) return score(statusA) - score(statusB);
-
-          return (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
-        });
-
-      const stock = candidates[0];
-      if (!stock) continue;
-
-      usedStockIds.add(stock.id);
-
-      const current = stock.quantity ?? 0;
-      const step = stepForUnit(stock.unit);
-      const next = Math.max(0, roundQty(current - step, stock.unit));
-
-      const updated = await updateStock(stock.id, { quantity: next });
-      if (updated) decrementedCount += 1;
-    }
-
-    return decrementedCount;
-  }
 
   const { data, error } = await supabase
     .from('stocks')
@@ -1596,6 +1552,49 @@ const ddmExceededList = inStock
   return data;
 };
 
+async function decrementStockForMeal(meal: WeekMeal): Promise<number> {
+  if (!meal.ingredients || meal.ingredients.length === 0) return 0;
+
+  let decrementedCount = 0;
+  const usedStockIds = new Set<string>();
+
+  for (const ingredient of meal.ingredients) {
+    const key = normalizeText(ingredient);
+    if (!key) continue;
+
+    const candidates = stocks
+      .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name && !usedStockIds.has(s.id))
+      .filter((s) => {
+        const productName = normalizeText(s.product!.name);
+        return productName.includes(key) || key.includes(productName);
+      })
+      .sort((a, b) => {
+        const statusA = getExpirationStatus(a.expiration_date, settings.soonDays);
+        const statusB = getExpirationStatus(b.expiration_date, settings.soonDays);
+
+        const score = (status: ExpirationStatus) =>
+          status === 'expired' ? 0 : status === 'soon' ? 1 : 2;
+
+        if (score(statusA) !== score(statusB)) return score(statusA) - score(statusB);
+
+        return (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
+      });
+
+    const stock = candidates[0];
+    if (!stock) continue;
+
+    usedStockIds.add(stock.id);
+
+    const current = stock.quantity ?? 0;
+    const step = stepForUnit(stock.unit);
+    const next = Math.max(0, roundQty(current - step, stock.unit));
+
+    const updated = await updateStock(stock.id, { quantity: next });
+    if (updated) decrementedCount += 1;
+  }
+
+  return decrementedCount;
+}
 const todayKey = toDateKey(new Date());
 
 const todayMeals = MEAL_SLOTS.map((slot) => ({
