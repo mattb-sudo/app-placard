@@ -451,6 +451,14 @@ function parseRecipeIngredients(text: string): RecipeIngredient[] {
     });
 }
 
+function formatRecipeIngredient(ingredient: RecipeIngredient): string {
+  if (ingredient.amount != null && ingredient.unit) {
+    return `${ingredient.name} ${ingredient.amount} ${ingredient.unit}`;
+  }
+
+  return ingredient.name;
+}
+
 const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
   { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
@@ -1848,13 +1856,13 @@ const renderWeekMenuTab = () => {
       const r = allRecipes.find((x) => x.id === recipe_id);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ? r.ingredients.map((i) => i.name) : null;
+      ingredients = r?.ingredients ? r.ingredients.map(formatRecipeIngredient) : null;
     } else if (v.startsWith('sample:')) {
       const rid = v.slice(7);
       const r = allRecipes.find((x) => x.id === rid);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ? r.ingredients.map((i) => i.name) : null;
+      ingredients = r?.ingredients ? r.ingredients.map(formatRecipeIngredient) : null;
       // pas de recipe_id en DB pour les samples => on stocke un snapshot
       recipe_id = null;
     }
@@ -2905,7 +2913,8 @@ const renderStockTab = () => {
                         <li key={p.id} className="shopping-list-item">
                           <span className="shopping-product-name">{p.name}</span>
                           {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
-                          <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          <button
+                          <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          
+                          <button
                             type="button"
                             className="btn-tertiary"
                             onClick={() => void hideFromShopping(p.id)}
