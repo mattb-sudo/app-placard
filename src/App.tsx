@@ -912,7 +912,23 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         ? ` Manquant : ${stockResult.missing.join(', ')}.`
         : '';
 
-    setInfo(`✅ Repas validé. ${stockMessage}${missingMessage}`);
+
+    let shoppingMessage = '';
+
+    if (stockResult.missing.length > 0) {
+      try {
+        const createdCount = await addMissingProductsSilently(stockResult.missing, meal.recipe_kind ?? 'savory');
+
+        shoppingMessage =
+          createdCount > 0
+            ? ` ${createdCount} ingrédient(s) ajouté(s) à la liste de courses.`
+            : ' Ingrédients manquants déjà présents dans la liste de courses.';
+      } catch (e) {
+        console.error(e);
+        shoppingMessage = " Impossible d'ajouter les ingrédients manquants à la liste de courses.";
+      }
+    }    
+    setInfo(`✅ Repas validé. ${stockMessage}${missingMessage}${shoppingMessage}`); 
   };
 
   const handleBarcodeDetected = (raw: string) => {
@@ -1488,6 +1504,21 @@ const unhideFromShopping = async (productId: string) => {
     setProducts((prev) => [...prev, normalized]);
     return { product: normalized, created: true };
   };
+
+  const addMissingProductsSilently = async (missing: string[], kind: RecipeKind): Promise<number> => {
+    let createdCount = 0;
+
+    for (const ing of missing) {
+      const trimmed = ing.trim();
+      if (!trimmed) continue;
+
+      const { created } = await ensureProductExistsForShopping(trimmed, kind);
+      if (created) createdCount += 1;
+    }
+
+    return createdCount;
+  };
+
   const addMissingIngredientsToShopping = async (missing: string[], kind: RecipeKind) => {
     if (!missing || missing.length === 0) return;
 
@@ -1495,14 +1526,7 @@ const unhideFromShopping = async (productId: string) => {
     setInfo(null);
 
     try {
-      let createdCount = 0;
-
-      for (const ing of missing) {
-        const trimmed = ing.trim();
-        if (!trimmed) continue;
-        const { created } = await ensureProductExistsForShopping(trimmed, kind);
-        if (created) createdCount += 1;
-      }
+      const createdCount = await addMissingProductsSilently(missing, kind);
 
       setActiveTab('shopping');
       setShoppingSubTab('others');
