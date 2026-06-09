@@ -900,11 +900,11 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         m.id === meal.id ? { ...m, consumed_at: data.consumed_at ?? consumedAt } : m,
       ),
     );
-    const decrementedCount = await decrementStockForMeal(meal);
+    const decrementedProducts = await decrementStockForMeal(meal);
 
     setInfo(
-      decrementedCount > 0
-        ? `✅ Repas validé. ${decrementedCount} stock(s) décrémenté(s).`
+      decrementedProducts.length > 0
+        ? `✅ Repas validé. Stock décrémenté : ${decrementedProducts.join(', ')}.`
         : '✅ Repas validé. Aucun stock correspondant trouvé.',
     );
   };
@@ -1558,10 +1558,10 @@ const ddmExceededList = inStock
   return data;
 };
 
-async function decrementStockForMeal(meal: WeekMeal): Promise<number> {
-  if (!meal.ingredients || meal.ingredients.length === 0) return 0;
+async function decrementStockForMeal(meal: WeekMeal): Promise<string[]> {
+  if (!meal.ingredients || meal.ingredients.length === 0) return [];
 
-  let decrementedCount = 0;
+  const decrementedProducts: string[] = [];
   const usedStockIds = new Set<string>();
 
   for (const ingredient of meal.ingredients) {
@@ -1596,10 +1596,11 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<number> {
     const next = Math.max(0, roundQty(current - step, stock.unit));
 
     const updated = await updateStock(stock.id, { quantity: next });
-    if (updated) decrementedCount += 1;
-  }
+    if (updated) {
+      decrementedProducts.push(stock.product?.name ?? ingredient);
+    }
 
-  return decrementedCount;
+  return decrementedProducts;
 }
 const todayKey = toDateKey(new Date());
 
