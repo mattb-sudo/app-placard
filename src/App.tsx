@@ -469,6 +469,7 @@ function App() {
   const [quantity, setQuantity] = useState('1');
   const [unit, setUnit] = useState('unité');
   const [expiration, setExpiration] = useState('');
+  const [expirationType, setExpirationType] = useState<ExpirationType>('dlc');
   const [barcode, setBarcode] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
@@ -1278,7 +1279,7 @@ const unhideFromShopping = async (productId: string) => {
           quantity: qtyToAdd,
           unit: trimmedUnit || null,
           expiration_date: expiration || null,
-          expiration_type: 'dlc',
+          expiration_type: expiration ? expirationType : 'unknown',
         })
         .select(
           `
@@ -1341,6 +1342,7 @@ const unhideFromShopping = async (productId: string) => {
     setQuantity('1');
     setUnit('unité');
     setExpiration('');
+    setExpirationType('dlc');
     setBarcode('');
     setSubCategory('');
     setKcal100g('');
@@ -2496,6 +2498,20 @@ const renderStockTab = () => {
                 Inconnu
               </button>
             </div>
+          </div>
+          
+          <div className="field-group">
+            <label className="field-label">Type de date</label>
+            <select
+              className="field-input"
+              value={expirationType}
+              onChange={(e) => setExpirationType(e.target.value as ExpirationType)}
+              disabled={!expiration}
+            >
+              <option value="dlc">DLC - à consommer jusqu'au</option>
+              <option value="ddm">DDM - à consommer de préférence avant</option>
+              <option value="unknown">Inconnu</option>
+            </select>
           </div>
 
           <div className="form-actions">
