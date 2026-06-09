@@ -2502,20 +2502,6 @@ const renderStockTab = () => {
               </button>
             </div>
           </div>
-          
-          <div className="field-group">
-            <label className="field-label">Type de date</label>
-            <select
-              className="field-input"
-              value={expirationType}
-              onChange={(e) => setExpirationType(e.target.value as ExpirationType)}
-              disabled={!expiration}
-            >
-              <option value="dlc">DLC - à consommer jusqu'au</option>
-              <option value="ddm">DDM - à consommer de préférence avant</option>
-              <option value="unknown">Inconnu</option>
-            </select>
-          </div>
 
           <div className="field-group">
             <label className="field-label">Type de date</label>
@@ -3092,6 +3078,20 @@ const renderStockTab = () => {
           <button type="button" className="btn-tertiary" onClick={() => setEditExpiration('')}>
             Effacer la date
           </button>
+        </div>
+        
+        <div className="field-group">
+          <label className="field-label">Type de date</label>
+          <select
+            className="field-input"
+            value={editExpirationType}
+            onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
+            disabled={!editExpiration}
+          >
+            <option value="dlc">DLC - à consommer jusqu'au</option>
+            <option value="ddm">DDM - à consommer de préférence avant</option>
+            <option value="unknown">Inconnu</option>
+          </select>
         </div>
 
         <div className="field-group full">
