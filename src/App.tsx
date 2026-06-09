@@ -238,10 +238,18 @@ function getExpirationStatus(
   return 'ok';
 }
 
-function getExpirationLabel(status: ExpirationStatus): string {
-  if (status === 'expired') return 'Périmé';
-  if (status === 'soon') return 'À consommer bientôt';
-  return 'OK';
+function getExpirationLabel(status: ExpirationStatus, type: ExpirationType): string {
+  if (type === 'ddm') {
+    if (status === 'expired') return 'DDM dépassée';
+    if (status === 'soon') return 'DDM bientôt dépassée';
+    return 'DDM OK';
+  }
+
+  if (type === 'unknown') return 'Date inconnue';
+
+  if (status === 'expired') return 'DLC dépassée';
+  if (status === 'soon') return 'DLC proche';
+  return 'DLC OK';
 }
 
 function mapOffCategoryToMainCategory(offCat: string): MainCategory {
@@ -1994,7 +2002,7 @@ const renderStockTab = () => {
             const expDate = item.expiration_date;
             const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
             const status = getExpirationStatus(expDate, settings.soonDays);
-            const labelStatus = getExpirationLabel(status);
+            const labelStatus = getExpirationLabel(status, item.expiration_type);
             const kcalInfo = kcalForStock(item);
 
             return (
@@ -2233,7 +2241,7 @@ const renderStockTab = () => {
           <ul className="priority-list">
             {priorityList.map((item) => {
               const status = getExpirationStatus(item.expiration_date, settings.soonDays);
-              const labelStatus = getExpirationLabel(status);
+              const labelStatus = getExpirationLabel(status, item.expiration_type);
 
               return (
                 <li key={item.id} className="priority-item">
