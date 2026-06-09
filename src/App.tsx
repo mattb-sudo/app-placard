@@ -1920,7 +1920,30 @@ const renderWeekMenuTab = () => {
                   </optgroup>
                 </select>
               </div>
+              <div className="field-group">
+                <label className="field-label">Date</label>
+                <input
+                  type="date"
+                  className="field-input"
+                  value={planDate}
+                  onChange={(e) => setPlanDate(e.target.value)}
+                />
+              </div>
 
+              <div className="field-group">
+                <label className="field-label">Repas</label>
+                <select
+                  className="field-input"
+                  value={planSlot}
+                  onChange={(e) => setPlanSlot(e.target.value as MealSlot)}
+                >
+                  {MEAL_SLOTS.map((slot) => (
+                    <option key={slot.key} value={slot.key}>
+                      {slot.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {(planRecipeValue === 'custom' || planRecipeValue === '') && (
                 <div className="field-group full">
                   <label className="field-label">Nom du repas</label>
