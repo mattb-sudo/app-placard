@@ -2823,6 +2823,14 @@ const renderStockTab = () => {
       return 2;
     };
 
+    const getShoppingReasonClass = (product: Product) => {
+      const reason = getShoppingReason(product);
+
+      if (reason === 'Stock faible') return 'shopping-product-reason--low';
+      if (reason === 'Repas planifié') return 'shopping-product-reason--planned';
+      return 'shopping-product-reason--absent';
+    };
+
     const sortedCurrentList = [...currentList].sort(
       (a, b) =>
         getShoppingReasonPriority(a) - getShoppingReasonPriority(b) ||
@@ -2897,8 +2905,7 @@ const renderStockTab = () => {
                         <li key={p.id} className="shopping-list-item">
                           <span className="shopping-product-name">{p.name}</span>
                           {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
-                          <span className="shopping-product-reason">{reason}</span>
-                          <button
+                          <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          <button
                             type="button"
                             className="btn-tertiary"
                             onClick={() => void hideFromShopping(p.id)}

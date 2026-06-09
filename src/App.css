@@ -816,6 +816,24 @@ body {
   background: #fef3c7;
   color: #92400e;
 }
+
+.shopping-product-reason--low {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fdba74;
+}
+
+.shopping-product-reason--planned {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.shopping-product-reason--absent {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
 /* Cartes recettes */
 
 .recipe-grid {
