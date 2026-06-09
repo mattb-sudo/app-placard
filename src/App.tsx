@@ -2532,6 +2532,7 @@ const renderStockTab = () => {
             {todayMeals.map(({ slot, meal }) => (
               <li key={slot.key} className="dashboard-meal-item">
                 <span className="dashboard-meal-slot">{slot.label}</span>
+                <span className="dashboard-meal-name">{meal?.recipe_name ?? '-'}</span>
                 {meal?.consumed_at && <span className="dashboard-meal-status">Validé</span>}
                 {meal && (() => {
                   const kcal = mealCalories(meal, dbRecipes, products);
