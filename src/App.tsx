@@ -819,7 +819,8 @@ useEffect(() => {
       },
       { onConflict: 'meal_date,meal_slot' },
     )
-    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes, consumed_at')    .single();
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes, consumed_at')    
+    .single();
 
   if (error || !data) {
     console.error(error);
@@ -867,6 +868,33 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
 
   setWeekMeals((prev) => prev.filter((m) => !(m.meal_date === meal_date && m.meal_slot === meal_slot)));
 };
+
+const markWeekMealConsumed = async (meal: WeekMeal) => {
+    if (meal.consumed_at) return;
+
+    setError(null);
+
+    const consumedAt = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('week_meals')
+      .update({ consumed_at: consumedAt })
+      .eq('id', meal.id)
+      .select('id, consumed_at')
+      .single();
+
+    if (error || !data) {
+      console.error(error);
+      setError("Impossible de valider ce repas.");
+      return;
+    }
+
+    setWeekMeals((prev) =>
+      prev.map((m) =>
+        m.id === meal.id ? { ...m, consumed_at: data.consumed_at ?? consumedAt } : m,
+      ),
+    );
+  };
 
   const handleBarcodeDetected = (raw: string) => {
     const cleaned = cleanBarcode(raw);
@@ -1872,6 +1900,13 @@ const renderWeekMenuTab = () => {
                             {cell.notes ? ` · ${cell.notes}` : ''}
                           </div>
                           <div className="meal-mini-actions">
+                            {cell.consumed_at ? (
+                              <span className="meal-consumed">Validé</span>
+                            ) : (
+                              <button type="button" className="btn-tertiary" onClick={() => void markWeekMealConsumed(cell)}>
+                                Valider
+                              </button>
+                            )}
                             <button type="button" className="btn-tertiary" onClick={() => openPlan(dk, slot.key)}>
                               ✏️
                             </button>
