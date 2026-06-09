@@ -900,13 +900,19 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         m.id === meal.id ? { ...m, consumed_at: data.consumed_at ?? consumedAt } : m,
       ),
     );
-    const decrementedProducts = await decrementStockForMeal(meal);
+    const stockResult = await decrementStockForMeal(meal);
 
-    setInfo(
-      decrementedProducts.length > 0
-        ? `✅ Repas validé. Stock décrémenté : ${decrementedProducts.join(', ')}.`
-        : '✅ Repas validé. Aucun stock correspondant trouvé.',
-    );
+    const stockMessage =
+      stockResult.decremented.length > 0
+        ? `Stock décrémenté : ${stockResult.decremented.join(', ')}.`
+        : 'Aucun stock correspondant trouvé.';
+
+    const missingMessage =
+      stockResult.missing.length > 0
+        ? ` Manquant : ${stockResult.missing.join(', ')}.`
+        : '';
+
+    setInfo(`✅ Repas validé. ${stockMessage}${missingMessage}`);
   };
 
   const handleBarcodeDetected = (raw: string) => {
@@ -1558,10 +1564,13 @@ const ddmExceededList = inStock
   return data;
 };
 
-async function decrementStockForMeal(meal: WeekMeal): Promise<string[]> {
-  if (!meal.ingredients || meal.ingredients.length === 0) return [];
+async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: string[]; missing: string[] }> {
+  if (!meal.ingredients || meal.ingredients.length === 0) {
+    return { decremented: [], missing: [] };
+  }
 
   const decrementedProducts: string[] = [];
+  const missingIngredients: string[] = [];
   const usedStockIds = new Set<string>();
 
   for (const ingredient of meal.ingredients) {
@@ -1587,7 +1596,10 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<string[]> {
       });
 
     const stock = candidates[0];
-    if (!stock) continue;
+    if (!stock) {
+      missingIngredients.push(ingredient);
+      continue;
+    }
 
     usedStockIds.add(stock.id);
 
@@ -1600,7 +1612,7 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<string[]> {
       decrementedProducts.push(stock.product?.name ?? ingredient);
     }
   }
-  return decrementedProducts;
+  return { decremented: decrementedProducts, missing: missingIngredients };
 }
 const todayKey = toDateKey(new Date());
 
