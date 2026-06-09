@@ -2275,6 +2275,7 @@ const renderStockTab = () => {
         )}
       </section>
 
+
       {/* Détails péremption */}
       <section className="dashboard-grid">
         <section className="card card-soft">
@@ -2323,7 +2324,7 @@ const renderStockTab = () => {
           )}
         </section>
       </section>
-      
+
       <section className="card card-soft">
         <h2 className="section-title">DDM dépassées</h2>
         <p className="section-subtitle">À vérifier, souvent encore consommable.</p>
