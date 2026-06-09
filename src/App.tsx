@@ -495,6 +495,7 @@ function App() {
   const [editQty, setEditQty] = useState('0');
   const [editUnit, setEditUnit] = useState('unité');
   const [editExpiration, setEditExpiration] = useState(''); // '' => null
+  const [editExpirationType, setEditExpirationType] = useState<ExpirationType>('dlc');
   const [editBarcode, setEditBarcode] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
@@ -561,6 +562,7 @@ function App() {
         setEditQty(String(item.quantity ?? 0));
         setEditUnit(item.unit ?? 'unité');
         setEditExpiration(item.expiration_date ?? ''); // '' si null
+        setEditExpirationType(item.expiration_type ?? 'dlc');
         setEditBarcode(item.product?.barcode ?? '');
         setEditKcal100g(item.product?.kcal_100g != null ? String(item.product.kcal_100g) : '');
         setEditGramsPerUnit(item.product?.grams_per_unit_g != null ? String(item.product.grams_per_unit_g) : '');
@@ -609,6 +611,7 @@ function App() {
         quantity: qtyFinal,
         unit: editUnit || 'unité',
         expiration_date: editExpiration ? editExpiration : null, // ✅ supprimable
+        expiration_type: editExpiration ? editExpirationType : 'unknown',
       })
       .eq('id', stockId)
       .select('id, place, quantity, unit, expiration_date, expiration_type')
@@ -2507,6 +2510,20 @@ const renderStockTab = () => {
               value={expirationType}
               onChange={(e) => setExpirationType(e.target.value as ExpirationType)}
               disabled={!expiration}
+            >
+              <option value="dlc">DLC - à consommer jusqu'au</option>
+              <option value="ddm">DDM - à consommer de préférence avant</option>
+              <option value="unknown">Inconnu</option>
+            </select>
+          </div>
+
+          <div className="field-group">
+            <label className="field-label">Type de date</label>
+            <select
+              className="field-input"
+              value={editExpirationType}
+              onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
+              disabled={!editExpiration}
             >
               <option value="dlc">DLC - à consommer jusqu'au</option>
               <option value="ddm">DDM - à consommer de préférence avant</option>
