@@ -2323,28 +2323,28 @@ const renderStockTab = () => {
             </div>
           )}
         </section>
-      </section>
 
-      <section className="card card-soft">
-        <h2 className="section-title">DDM dépassées</h2>
-        <p className="section-subtitle">À vérifier, souvent encore consommable.</p>
+        <section className="card card-soft">
+          <h2 className="section-title">DDM dépassées</h2>
+          <p className="section-subtitle">À vérifier, souvent encore consommable.</p>
 
-        {ddmExceededList.length === 0 ? (
-          <p className="muted">Aucune DDM dépassée ✅</p>
-        ) : (
-          <div className="chips-row">
-            {ddmExceededList.map((item) => (
-              <div key={item.id} className="chip">
-                <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
-                {item.expiration_date && (
-                  <span className="chip-meta">
-                    {new Date(item.expiration_date).toLocaleDateString()}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+          {ddmExceededList.length === 0 ? (
+            <p className="muted">Aucune DDM dépassée ✅</p>
+          ) : (
+            <div className="chips-row">
+              {ddmExceededList.map((item) => (
+                <div key={item.id} className="chip">
+                  <span className="chip-title">{item.product?.name ?? 'Produit'}</span>
+                  {item.expiration_date && (
+                    <span className="chip-meta">
+                      {new Date(item.expiration_date).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </section>
 
       <section className="card">
