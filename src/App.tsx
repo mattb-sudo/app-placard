@@ -2806,6 +2806,29 @@ const renderStockTab = () => {
     const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
 
+    const getShoppingReason = (product: Product) => {
+      const isLowStock = lowStockByProductId.has(product.id);
+      const isPlannedMissing = plannedMissingProductIds.has(product.id);
+
+      if (isLowStock) return 'Stock faible';
+      if (isPlannedMissing) return 'Repas planifié';
+      return 'Absent';
+    };
+
+    const getShoppingReasonPriority = (product: Product) => {
+      const reason = getShoppingReason(product);
+
+      if (reason === 'Stock faible') return 0;
+      if (reason === 'Repas planifié') return 1;
+      return 2;
+    };
+
+    const sortedCurrentList = [...currentList].sort(
+      (a, b) =>
+        getShoppingReasonPriority(a) - getShoppingReasonPriority(b) ||
+        a.name.localeCompare(b.name),
+    );
+
     const title = shoppingSubTab === 'main' ? 'Aliments principaux manquants' : 'Autres aliments manquants';
     const subtitle =
       shoppingSubTab === 'main'
@@ -2813,7 +2836,7 @@ const renderStockTab = () => {
         : 'Les aliments connus absents ou bientôt à racheter.';
 
     const grouped: { [key: string]: Product[] } = {};
-    for (const p of currentList) {
+    for (const p of sortedCurrentList) {
       const cat = (p.category && MAIN_CATEGORIES.includes(p.category as MainCategory) ? p.category : 'Autres') || 'Autres';
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(p);
@@ -2869,10 +2892,7 @@ const renderStockTab = () => {
                   <h3 className="shopping-group-title">{cat}</h3>
                   <ul className="shopping-list">
                     {items.map((p) => {
-                      const isLowStock = lowStockByProductId.has(p.id);
-                      const isPlannedMissing = plannedMissingProductIds.has(p.id);
-                      const reason = isLowStock ? 'Stock faible' : isPlannedMissing ? 'Repas planifié' : 'Absent';
-
+                      const reason = getShoppingReason(p);
                       return (
                         <li key={p.id} className="shopping-list-item">
                           <span className="shopping-product-name">{p.name}</span>
