@@ -1645,7 +1645,9 @@ const todayMeals = MEAL_SLOTS.map((slot) => ({
   meal: weekMeals.find((meal) => meal.meal_date === todayKey && meal.meal_slot === slot.key) ?? null,
 }));
 
-const todayCalories = todayMeals.reduce((total, item) => {
+const consumedTodayMeals = todayMeals.filter(({ meal }) => meal?.consumed_at);
+
+const todayCalories = consumedTodayMeals.reduce((total, item) => {
   if (!item.meal) return total;
   const kcal = mealCalories(item.meal, dbRecipes, products);
   return total + (kcal ?? 0);
@@ -2411,7 +2413,7 @@ const renderStockTab = () => {
         <div className="stat-card">
           <div className="stat-label">Calories aujourd'hui</div>
           <div className="stat-value">{todayCalories}</div>
-          <div className="stat-foot">Repas planifiés</div>
+          <div className="stat-foot">Repas validés aujourd'hui</div>
         </div>
       </section>
 
@@ -2530,7 +2532,7 @@ const renderStockTab = () => {
             {todayMeals.map(({ slot, meal }) => (
               <li key={slot.key} className="dashboard-meal-item">
                 <span className="dashboard-meal-slot">{slot.label}</span>
-                <span className="dashboard-meal-name">{meal?.recipe_name ?? '-'}</span>
+                {meal?.consumed_at && <span className="dashboard-meal-status">Validé</span>}
                 {meal && (() => {
                   const kcal = mealCalories(meal, dbRecipes, products);
                   return kcal != null ? (

@@ -1105,6 +1105,13 @@ body {
   white-space: nowrap;
 }
 
+.dashboard-meal-status {
+  color: #166534;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .dashboard-meal-kcal {
   color: #374151;
   font-size: 0.8rem;
