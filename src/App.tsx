@@ -2507,9 +2507,9 @@ const renderStockTab = () => {
             <label className="field-label">Type de date</label>
             <select
               className="field-input"
-              value={editExpirationType}
-              onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
-              disabled={!editExpiration}
+              value={expirationType}
+              onChange={(e) => setExpirationType(e.target.value as ExpirationType)}
+              disabled={!expiration}
             >
               <option value="dlc">DLC - à consommer jusqu'au</option>
               <option value="ddm">DDM - à consommer de préférence avant</option>
@@ -3084,9 +3084,9 @@ const renderStockTab = () => {
           <label className="field-label">Type de date</label>
           <select
             className="field-input"
-            value={expirationType}
-            onChange={(e) => setExpirationType(e.target.value as ExpirationType)}
-            disabled={!expiration}
+            value={editExpirationType}
+            onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
+            disabled={!editExpiration}
           >
             <option value="dlc">DLC - à consommer jusqu'au</option>
             <option value="ddm">DDM - à consommer de préférence avant</option>
