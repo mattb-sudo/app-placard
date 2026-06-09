@@ -1599,7 +1599,7 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<string[]> {
     if (updated) {
       decrementedProducts.push(stock.product?.name ?? ingredient);
     }
-
+  }
   return decrementedProducts;
 }
 const todayKey = toDateKey(new Date());
