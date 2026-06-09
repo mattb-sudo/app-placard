@@ -1656,8 +1656,7 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
 
     const current = stock.quantity ?? 0;
     const amountToSubtract = quantityToSubtract(parsedIngredient, stock.unit);
-    const actualRemoved = Math.min(current, amountToSubtract);
-    const next = Math.max(0, roundQty(current - amountToSubtract, stock.unit));
+    const actualRemoved = roundQty(Math.min(current, amountToSubtract), stock.unit);    const next = Math.max(0, roundQty(current - amountToSubtract, stock.unit));
     const unitLabel = stock.unit ?? 'unité';
 
     const updated = await updateStock(stock.id, { quantity: next });
