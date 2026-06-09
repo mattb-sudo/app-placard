@@ -880,12 +880,18 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
       .from('week_meals')
       .update({ consumed_at: consumedAt })
       .eq('id', meal.id)
+      .is('consumed_at', null)
       .select('id, consumed_at')
-      .single();
+      .maybeSingle();
 
-    if (error || !data) {
+    if (error) {
       console.error(error);
       setError("Impossible de valider ce repas.");
+      return;
+    }
+
+    if (!data) {
+      setInfo('Repas déjà validé.');
       return;
     }
 
