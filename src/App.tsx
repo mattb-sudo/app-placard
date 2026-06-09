@@ -113,6 +113,7 @@ type WeekMeal = {
   kcal_override: number | null;
   servings: number | null;
   notes: string | null;
+  consumed_at: string | null;
 };
 
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
@@ -691,8 +692,7 @@ const fetchWeekMeals = async (start: Date) => {
 
   const { data, error } = await supabase
     .from('week_meals')
-    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes')
-    .gte('meal_date', from)
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes, consumed_at')    .gte('meal_date', from)
     .lte('meal_date', to)
     .order('meal_date', { ascending: true });
 
@@ -715,6 +715,7 @@ const fetchWeekMeals = async (start: Date) => {
   kcal_override: r.kcal_override ?? null,     // ✅ AJOUT
   servings: r.servings ?? null,
   notes: r.notes ?? null,
+  consumed_at: r.consumed_at ?? null,
 }));
 
   setWeekMeals(normalized);
@@ -799,7 +800,7 @@ useEffect(() => {
     }
   };
 
-  const upsertWeekMeal = async (payload: Omit<WeekMeal, 'id'>) => {
+  const upsertWeekMeal = async (payload: Omit<WeekMeal, 'id' | 'consumed_at'>) => {
   setError(null);
 
   const { data, error } = await supabase
@@ -818,8 +819,7 @@ useEffect(() => {
       },
       { onConflict: 'meal_date,meal_slot' },
     )
-    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes')
-    .single();
+    .select('id, meal_date, meal_slot, recipe_id, recipe_name, recipe_kind, ingredients, kcal_override, servings, notes, consumed_at')    .single();
 
   if (error || !data) {
     console.error(error);
@@ -838,6 +838,7 @@ useEffect(() => {
     kcal_override: data.kcal_override ?? null,  // ✅ AJOUT
     servings: data.servings ?? null,
     notes: data.notes ?? null,
+    consumed_at: data.consumed_at ?? null,
   };
 
   setWeekMeals((prev) => {
