@@ -6,6 +6,7 @@ import './App.css';
 
 type Tab = 'dashboard' | 'stock' | 'history' | 'weekmenu' | 'shopping' | 'recipes' | 'settings';
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
+type ExpirationType = 'dlc' | 'ddm' | 'unknown';
 
 const MAIN_CATEGORIES = [
   'Produit de santé',
@@ -66,6 +67,7 @@ type StockItem = {
   quantity: number | null;
   unit: string | null;
   expiration_date: string | null;
+  expiration_type: ExpirationType;
   product: Product | null;
 };
 
@@ -873,6 +875,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
           quantity,
           unit,
           expiration_date,
+          expiration_type,
           product:products (
             id,
             name,
@@ -903,6 +906,7 @@ const deleteWeekMeal = async (meal_date: string, meal_slot: MealSlot) => {
             quantity: row.quantity,
             unit: row.unit,
             expiration_date: row.expiration_date,
+            expiration_type: (row.expiration_type as ExpirationType) ?? 'dlc',
             product: product
               ? {
                   id: product.id,
@@ -1232,7 +1236,7 @@ const unhideFromShopping = async (productId: string) => {
     // 2) merge same stock line
     let stockQuery = supabase
       .from('stocks')
-      .select(`id,place,quantity,unit,expiration_date`)
+      .select(`id,place,quantity,unit,expiration_date,expiration_type`)
       .eq('product_id', productId)
       .eq('place', trimmedPlace)
       .eq('unit', trimmedUnit);
@@ -1255,7 +1259,7 @@ const unhideFromShopping = async (productId: string) => {
         .eq('id', existing.id)
         .select(
           `
-          id, place, quantity, unit, expiration_date,
+          id, place, quantity, unit, expiration_date, expiration_type,
           product:products (
             id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
@@ -1274,10 +1278,11 @@ const unhideFromShopping = async (productId: string) => {
           quantity: qtyToAdd,
           unit: trimmedUnit || null,
           expiration_date: expiration || null,
+          expiration_type: 'dlc',
         })
         .select(
           `
-          id, place, quantity, unit, expiration_date,
+          id, place, quantity, unit, expiration_date, expiration_type,
           product:products (
             id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
@@ -1298,6 +1303,7 @@ const unhideFromShopping = async (productId: string) => {
       quantity: finalStockRow.quantity,
       unit: finalStockRow.unit,
       expiration_date: finalStockRow.expiration_date,
+      expiration_type: (finalStockRow.expiration_type as ExpirationType) ?? 'dlc',
       product: product
       ? {
           id: product.id,
@@ -1453,14 +1459,14 @@ const expiredList = inStock
   .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired')
   .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
-  const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date'>>) => {
+  const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date' | 'expiration_type'>>) => {
   setError(null);
 
   const { data, error } = await supabase
     .from('stocks')
     .update(patch)
     .eq('id', stockId)
-    .select('id, place, quantity, unit, expiration_date')
+    .select('id, place, quantity, unit, expiration_date, expiration_type')
     .single();
 
   if (error || !data) {
@@ -2235,7 +2241,7 @@ const renderStockTab = () => {
           </ul>
         )}
       </section>
-      
+
       {/* Détails péremption */}
       <section className="dashboard-grid">
         <section className="card card-soft">
