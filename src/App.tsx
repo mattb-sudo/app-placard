@@ -1245,7 +1245,15 @@ const unhideFromShopping = async (productId: string) => {
       .eq('place', trimmedPlace)
       .eq('unit', trimmedUnit);
 
-    if (expiration) stockQuery = stockQuery.eq('expiration_date', expiration);
+    if (expiration) {
+      stockQuery = stockQuery
+        .eq('expiration_date', expiration)
+        .eq('expiration_type', expirationType);
+    } else {
+      stockQuery = stockQuery
+        .is('expiration_date', null)
+        .eq('expiration_type', 'unknown');
+    }
 
     const { data: existingStocks, error: existingStocksError } = await stockQuery.limit(1);
     if (existingStocksError) throw existingStocksError;
