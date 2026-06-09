@@ -2766,10 +2766,34 @@ const renderStockTab = () => {
       lowStockList.filter((s) => s.product?.id).map((s) => s.product!.id),
     );
 
+    const plannedMissingNames = new Set<string>();
+
+    for (const meal of weekMeals) {
+      if (!meal.ingredients || meal.consumed_at) continue;
+
+      for (const ingredient of meal.ingredients) {
+        const key = normalizeText(ingredient);
+
+        const hasStock = stocks.some((stock) => {
+          if ((stock.quantity ?? 0) <= 0 || !stock.product?.name) return false;
+          const productName = normalizeText(stock.product.name);
+          return productName.includes(key) || key.includes(productName);
+        });
+
+        if (!hasStock) plannedMissingNames.add(key);
+      }
+    }
+
     const lowStockByProductId = new Map(
       lowStockList
         .filter((s) => s.product?.id)
         .map((s) => [s.product!.id, s]),
+    );
+
+    const plannedMissingProductIds = new Set(
+      products
+        .filter((product) => plannedMissingNames.has(normalizeText(product.name)))
+        .map((product) => product.id),
     );
 
     const presentProductIds = new Set(
@@ -2844,24 +2868,27 @@ const renderStockTab = () => {
                 <div key={cat} style={{ marginBottom: '0.9rem' }}>
                   <h3 className="shopping-group-title">{cat}</h3>
                   <ul className="shopping-list">
-                    {items.map((p) => (
-                      <li key={p.id} className="shopping-list-item">
-                        <span className="shopping-product-name">{p.name}</span>
-                        {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
-                        <span className="shopping-product-reason">
-                          {lowStockByProductId.has(p.id) ? 'Stock faible' : 'Absent'}
-                        </span>
-                        <button
-                          type="button"
-                          className="btn-tertiary"
-                          onClick={() => void hideFromShopping(p.id)}
-                          title="Retirer de la liste"
-                        >
-                          🗑️
-                        </button>
+                    {items.map((p) => {
+                      const isLowStock = lowStockByProductId.has(p.id);
+                      const isPlannedMissing = plannedMissingProductIds.has(p.id);
+                      const reason = isLowStock ? 'Stock faible' : isPlannedMissing ? 'Repas planifié' : 'Absent';
 
-                      </li>
-                    ))}
+                      return (
+                        <li key={p.id} className="shopping-list-item">
+                          <span className="shopping-product-name">{p.name}</span>
+                          {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
+                          <span className="shopping-product-reason">{reason}</span>
+                          <button
+                            type="button"
+                            className="btn-tertiary"
+                            onClick={() => void hideFromShopping(p.id)}
+                            title="Retirer de la liste"
+                          >
+                            🗑️
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               );
