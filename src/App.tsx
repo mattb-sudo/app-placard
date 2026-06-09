@@ -252,6 +252,12 @@ function getExpirationLabel(status: ExpirationStatus, type: ExpirationType): str
   return 'DLC OK';
 }
 
+function getExpirationClass(status: ExpirationStatus, type: ExpirationType): string {
+  if (type === 'ddm') return `status-ddm-${status}`;
+  if (type === 'unknown') return 'status-unknown';
+  return `status-dlc-${status}`;
+}
+
 function mapOffCategoryToMainCategory(offCat: string): MainCategory {
   const c = offCat.toLowerCase();
   if (c.includes('épice') || c.includes('herbes') || c.includes('spice')) return 'Épices';
@@ -2083,7 +2089,7 @@ const renderStockTab = () => {
                 <td>{exp}</td>
 
                 <td>
-                  <span className={`status-pill status-${status}`}>
+                  <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
                     <span className="status-dot" />
                     {labelStatus}
                   </span>
@@ -2252,7 +2258,7 @@ const renderStockTab = () => {
                     </span>
                   </div>
 
-                  <span className={`status-pill status-${status}`}>
+                  <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
                     <span className="status-dot" />
                     {labelStatus}
                   </span>

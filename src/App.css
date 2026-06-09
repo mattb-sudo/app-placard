@@ -545,6 +545,76 @@ body {
   background: #ef4444;
 }
 
+.status-dlc-ok {
+  color: #166534;
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+}
+
+.status-dlc-ok .status-dot {
+  background: #16a34a;
+}
+
+.status-dlc-soon {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.status-dlc-soon .status-dot {
+  background: #f97316;
+}
+
+.status-dlc-expired {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.status-dlc-expired .status-dot {
+  background: #dc2626;
+}
+
+.status-ddm-ok {
+  color: #0f766e;
+  background: #ecfdf5;
+  border-color: #99f6e4;
+}
+
+.status-ddm-ok .status-dot {
+  background: #14b8a6;
+}
+
+.status-ddm-soon {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.status-ddm-soon .status-dot {
+  background: #3b82f6;
+}
+
+.status-ddm-expired {
+  color: #6d28d9;
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+}
+
+.status-ddm-expired .status-dot {
+  background: #8b5cf6;
+}
+
+.status-unknown {
+  color: #4b5563;
+  background: #f9fafb;
+  border-color: #d1d5db;
+}
+
+.status-unknown .status-dot {
+  background: #9ca3af;
+}
+
 /* Texte générique */
 
 .muted {
