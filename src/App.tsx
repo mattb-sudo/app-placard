@@ -459,6 +459,24 @@ function formatRecipeIngredient(ingredient: RecipeIngredient): string {
   return ingredient.name;
 }
 
+function parseSingleMealIngredient(raw: string): RecipeIngredient {
+  return parseRecipeIngredients(raw)[0] ?? { name: raw.trim(), amount: null, unit: null };
+}
+
+function quantityToSubtract(ingredient: RecipeIngredient, stockUnit: string | null): number {
+  if (ingredient.amount == null || !ingredient.unit) {
+    return stepForUnit(stockUnit);
+  }
+
+  const unit = (stockUnit ?? 'unité').toLowerCase();
+
+  if (ingredient.unit === 'g' && unit === 'g') return ingredient.amount;
+  if (ingredient.unit === 'ml' && unit === 'l') return ingredient.amount / 1000;
+  if (ingredient.unit === 'unité' && unit === 'unité') return ingredient.amount;
+
+  return stepForUnit(stockUnit);
+}
+
 const navItems: { key: Tab; label: string; icon: string }[] = [
   { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
   { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
@@ -1606,7 +1624,8 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
   const usedStockIds = new Set<string>();
 
   for (const ingredient of meal.ingredients) {
-    const key = normalizeText(ingredient);
+    const parsedIngredient = parseSingleMealIngredient(ingredient);
+    const key = normalizeText(parsedIngredient.name);
     if (!key) continue;
 
     const candidates = stocks
@@ -1636,8 +1655,8 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
     usedStockIds.add(stock.id);
 
     const current = stock.quantity ?? 0;
-    const step = stepForUnit(stock.unit);
-    const next = Math.max(0, roundQty(current - step, stock.unit));
+    const amountToSubtract = quantityToSubtract(parsedIngredient, stock.unit);
+    const next = Math.max(0, roundQty(current - amountToSubtract, stock.unit));
 
     const updated = await updateStock(stock.id, { quantity: next });
     if (updated) {
