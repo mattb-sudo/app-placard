@@ -610,7 +610,7 @@ function App() {
         expiration_date: editExpiration ? editExpiration : null, // ✅ supprimable
       })
       .eq('id', stockId)
-      .select('id, place, quantity, unit, expiration_date')
+      .select('id, place, quantity, unit, expiration_date, expiration_type')
       .single();
 
     if (stockErr || !stockRow) throw stockErr;
