@@ -843,6 +843,13 @@ body {
   color: var(--muted);
 }
 
+.recipe-urgent {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  color: #9a3412;
+  font-weight: 600;
+}
+
 .recipe-subtitle {
   margin: 0.4rem 0 0.1rem;
   font-size: 0.82rem;

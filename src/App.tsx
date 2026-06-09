@@ -1749,7 +1749,7 @@ const renderWeekMenuTab = () => {
       const key = normalize(ingredient);
       return stockNames.some((n) => n.includes(key));
     };
-
+    
     // collect missing
     const missingSavory = new Set<string>();
     const missingSweet = new Set<string>();
@@ -2817,6 +2817,19 @@ const renderStockTab = () => {
       return stockNames.some((n) => n.includes(key));
     };
 
+    const usesUrgentIngredient = (ingredient: string) => {
+      const key = normalize(ingredient);
+      return urgentStockNames.some((n) => n.includes(key));
+    };
+
+    const urgentStockNames = stocks
+      .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
+      .filter((s) => {
+        const status = getExpirationStatus(s.expiration_date, settings.soonDays);
+        return status === 'soon' || status === 'expired';
+      })
+      .map((s) => normalize(s.product!.name));
+
     // ✅ IMPORTANT : recettes DB + catalogue d'exemples
     const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
 
@@ -2824,12 +2837,21 @@ const renderStockTab = () => {
       const missing = r.ingredients
         .filter((ing: RecipeIngredient) => !hasIngredient(ing.name))
         .map((ing: RecipeIngredient) => ing.name);
+
+      const urgentIngredients = r.ingredients
+        .filter((ing: RecipeIngredient) => hasIngredient(ing.name) && usesUrgentIngredient(ing.name))
+        .map((ing: RecipeIngredient) => ing.name);
+
       const missingCount = missing.length;
+      const urgentCount = urgentIngredients.length;
       const feasible = missingCount <= settings.recipesMaxMissing;
-      return { ...r, missing, missingCount, feasible };
+
+      return { ...r, missing, missingCount, urgentIngredients, urgentCount, feasible };
     });
 
-    const feasibleList = enriched.filter((r) => r.feasible).sort((a, b) => a.missingCount - b.missingCount);
+    const feasibleList = enriched
+      .filter((r) => r.feasible)
+      .sort((a, b) => b.urgentCount - a.urgentCount || a.missingCount - b.missingCount);
     const current = recipesSubTab === 'feasible' ? feasibleList : enriched;
 
     const savory = current.filter((r) => r.kind === 'savory');
@@ -2846,7 +2868,10 @@ const renderStockTab = () => {
         : 'Catalogue de recettes (exemples) séparées en sucré / salé.';
 
     const renderRecipeCard = (r: any) => {
-      const badge = `🧾 ${r.missingCount} manquant(s)`;
+      const badge =
+        r.urgentCount > 0
+          ? `${r.urgentCount} urgent(s) · ${r.missingCount} manquant(s)`
+          : `${r.missingCount} manquant(s)`;
       const isDbRecipe = dbRecipes.some((x) => x.id === r.id); // permet d'afficher "supprimer" seulement sur DB
       const kcalR = kcalForRecipe(r, products);
       return (
@@ -2869,6 +2894,12 @@ const renderStockTab = () => {
               )}
             </div>
           </div>
+          
+          {r.urgentIngredients.length > 0 && (
+            <p className="recipe-urgent">
+              À utiliser vite : {r.urgentIngredients.join(', ')}
+            </p>
+          )}
 
           <p className="recipe-subtitle">Ingrédients :</p>
           <ul className="recipe-list">
