@@ -1656,13 +1656,19 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
 
     const current = stock.quantity ?? 0;
     const amountToSubtract = quantityToSubtract(parsedIngredient, stock.unit);
+    const actualRemoved = Math.min(current, amountToSubtract);
     const next = Math.max(0, roundQty(current - amountToSubtract, stock.unit));
+    const unitLabel = stock.unit ?? 'unité';
 
     const updated = await updateStock(stock.id, { quantity: next });
     if (updated) {
-      const unitLabel = stock.unit ?? 'unité';
-      const removedLabel = `${stock.product?.name ?? ingredient} (-${amountToSubtract} ${unitLabel})`;
+      const removedLabel = `${stock.product?.name ?? ingredient} (-${actualRemoved} ${unitLabel})`;
       decrementedProducts.push(removedLabel);
+
+      if (amountToSubtract > current) {
+        const missingAmount = roundQty(amountToSubtract - current, stock.unit);
+        missingIngredients.push(`${parsedIngredient.name} ${missingAmount} ${unitLabel}`);
+      }
     }
   }
   return { decremented: decrementedProducts, missing: missingIngredients };
