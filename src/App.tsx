@@ -1651,6 +1651,26 @@ const renderHistoryTab = () => {
   );
 };
 
+const getRecipePlanValue = (recipe: Recipe) => {
+  const isDbRecipe = dbRecipes.some((r) => r.id === recipe.id);
+  return isDbRecipe ? `db:${recipe.id}` : `sample:${recipe.id}`;
+};
+
+const openPlanFromRecipe = (recipe: Recipe) => {
+  const today = new Date();
+
+  setWeekStart(startOfWeekMonday(today));
+  setPlanDate(toDateKey(today));
+  setPlanSlot('lunch');
+  setPlanRecipeValue(getRecipePlanValue(recipe));
+  setPlanCustomName('');
+  setPlanServings('1');
+  setPlanNotes('');
+  setPlanKcalOverride('');
+  setActiveTab('weekmenu');
+  setPlanOpen(true);
+};
+
 const renderWeekMenuTab = () => {
   const days = Array.from({ length: 7 }).map((_, i) => addDays(weekStart, i));
   const dayKeys = days.map(toDateKey);
@@ -1660,11 +1680,6 @@ const renderWeekMenuTab = () => {
 
   const getCell = (dateKey: string, slot: MealSlot) =>
     weekMeals.find((m) => m.meal_date === dateKey && m.meal_slot === slot) ?? null;
-
-  const getRecipePlanValue = (recipe: Recipe) => {
-    const isDbRecipe = dbRecipes.some((r) => r.id === recipe.id);
-    return isDbRecipe ? `db:${recipe.id}` : `sample:${recipe.id}`;
-  };
 
   const openPlan = (dateKey: string, slot: MealSlot) => {
     const existing = getCell(dateKey, slot);
@@ -1686,17 +1701,6 @@ const renderWeekMenuTab = () => {
       setPlanNotes('');
     }
 
-    setPlanOpen(true);
-  };
-
-  const openPlanFromRecipe = (recipe: Recipe) => {
-    setPlanDate(toDateKey(new Date()));
-    setPlanSlot('lunch');
-    setPlanRecipeValue(getRecipePlanValue(recipe));
-    setPlanCustomName('');
-    setPlanServings('1');
-    setPlanNotes('');
-    setPlanKcalOverride('');
     setPlanOpen(true);
   };
 
