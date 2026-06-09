@@ -1661,6 +1661,11 @@ const renderWeekMenuTab = () => {
   const getCell = (dateKey: string, slot: MealSlot) =>
     weekMeals.find((m) => m.meal_date === dateKey && m.meal_slot === slot) ?? null;
 
+  const getRecipePlanValue = (recipe: Recipe) => {
+    const isDbRecipe = dbRecipes.some((r) => r.id === recipe.id);
+    return isDbRecipe ? `db:${recipe.id}` : `sample:${recipe.id}`;
+  };
+
   const openPlan = (dateKey: string, slot: MealSlot) => {
     const existing = getCell(dateKey, slot);
 
@@ -1681,6 +1686,17 @@ const renderWeekMenuTab = () => {
       setPlanNotes('');
     }
 
+    setPlanOpen(true);
+  };
+
+  const openPlanFromRecipe = (recipe: Recipe) => {
+    setPlanDate(toDateKey(new Date()));
+    setPlanSlot('lunch');
+    setPlanRecipeValue(getRecipePlanValue(recipe));
+    setPlanCustomName('');
+    setPlanServings('1');
+    setPlanNotes('');
+    setPlanKcalOverride('');
     setPlanOpen(true);
   };
 
@@ -2918,6 +2934,16 @@ const renderStockTab = () => {
             </div>
           </div>
           
+          <div className="recipe-actions">
+            <button
+              type="button"
+              className="recipe-add-btn"
+              onClick={() => openPlanFromRecipe(r)}
+            >
+              Planifier
+            </button>
+          </div>
+
           {r.urgentIngredients.length > 0 && (
             <p className="recipe-urgent">
               À utiliser vite : {r.urgentIngredients.join(', ')}
