@@ -994,6 +994,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
           product:products (
             id,
             name,
+            generic_name,
             brand,
             category,
             sub_category,
@@ -1026,6 +1027,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
               ? {
                   id: product.id,
                   name: product.name,
+                  generic_name: product.generic_name ?? null,
                   brand: product.brand,
                   category: product.category,
                   sub_category: product.sub_category ?? null,
@@ -1048,7 +1050,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
 
       const { data: productsData, error: productsError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`);
+        .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`);
 
       if (productsError) {
         console.error(productsError);
@@ -1057,6 +1059,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         const normalizedProducts: Product[] = (productsData ?? []).map((p: any) => ({
           id: p.id,
           name: p.name,
+          generic_name: p.generic_name ?? null,
           brand: p.brand,
           category: p.category,
           sub_category: p.sub_category ?? null,
@@ -1201,7 +1204,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         .from('products')
         .update({ is_main: !currentValue })
         .eq('id', productId)
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
+        .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .single();
 
       if (error || !data) throw error || new Error('Erreur mise à jour produit');
@@ -1209,6 +1212,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
       const updated: Product = {
         id: data.id,
         name: data.name,
+        generic_name: data.generic_name ?? null,
         brand: data.brand,
         category: data.category,
         sub_category: data.sub_category ?? null,
@@ -1285,7 +1289,7 @@ const unhideFromShopping = async (productId: string) => {
     if (trimmedBarcode) {
       const { data: existingProducts, error: existingProductError } = await supabase
         .from('products')
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
+        .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .eq('barcode', trimmedBarcode)
         .limit(1);
 
@@ -1298,6 +1302,7 @@ const unhideFromShopping = async (productId: string) => {
         .from('products')
         .insert({
           name: name.trim(),
+          generic_name: genericName.trim() || null,
           brand: brand.trim() || null,
           category: category ? category : null,
           sub_category: getSubcatsFor(category).length > 0 ? (subCategory || null) : null,
@@ -1311,7 +1316,7 @@ const unhideFromShopping = async (productId: string) => {
           grams_per_unit_g: gramsPerUnit ? Number(gramsPerUnit) : null,
           density_g_ml: densityGml ? Number(densityGml) : null,
         })
-        .select(`id,name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
+        .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
         .single();
 
       if (productError || !productData) throw productError || new Error('Erreur création produit');
@@ -1321,6 +1326,7 @@ const unhideFromShopping = async (productId: string) => {
     const normalizedProduct: Product = {
       id: productRow.id,
       name: productRow.name,
+      generic_name: productRow.generic_name ?? null,
       brand: productRow.brand,
       category: productRow.category,
       sub_category: productRow.sub_category ?? null,
@@ -1384,7 +1390,7 @@ const unhideFromShopping = async (productId: string) => {
           `
           id, place, quantity, unit, expiration_date, expiration_type,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
+            id, name,generic_name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
         `,
         )
@@ -1407,7 +1413,7 @@ const unhideFromShopping = async (productId: string) => {
           `
           id, place, quantity, unit, expiration_date, expiration_type,
           product:products (
-            id, name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
+            id, name,generic_name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
         `,
         )
@@ -1431,6 +1437,7 @@ const unhideFromShopping = async (productId: string) => {
       ? {
           id: product.id,
           name: product.name,
+          generic_name: product.generic_name ?? null,
           brand: product.brand,
           category: product.category,
           sub_category: product.sub_category ?? null,
@@ -1458,6 +1465,7 @@ const unhideFromShopping = async (productId: string) => {
 
     // reset form
     setName('');
+    setGenericName('');
     setBrand('');
     setCategory('');
     setEditSubCategory('');
@@ -1497,6 +1505,7 @@ const unhideFromShopping = async (productId: string) => {
       .from('products')
       .insert({
         name: keyword,
+        generic_name: keyword,
         brand: null,
         category,
         sub_category: null,
@@ -1512,7 +1521,7 @@ const unhideFromShopping = async (productId: string) => {
         grams_per_unit_g: null,
         density_g_ml: null,
       })
-      .select('id, name, brand, category, sub_category, default_unit, barcode, shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml')
+      .select('id, name, generic_name,brand, category, sub_category, default_unit, barcode, shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml')
       .single();
 
     if (createError || !created) throw createError || new Error('Erreur création produit');
@@ -1520,6 +1529,7 @@ const unhideFromShopping = async (productId: string) => {
     const normalized: Product = {
       id: created.id,
       name: created.name,
+      generic_name: created.generic_name ?? null,
       brand: created.brand,
       category: created.category,
       sub_category: created.sub_category ?? null,
