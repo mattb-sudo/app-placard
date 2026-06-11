@@ -1646,28 +1646,44 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
         return (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
       });
 
-    const stock = candidates[0];
-    if (!stock) {
+    if (candidates.length === 0) {
       missingIngredients.push(ingredient);
       continue;
     }
 
-    usedStockIds.add(stock.id);
+    let remainingToSubtract = quantityToSubtract(parsedIngredient, candidates[0].unit);
+    let removedSomething = false;
+    let lastUnitLabel = candidates[0].unit ?? 'unité';
 
-    const current = stock.quantity ?? 0;
-    const amountToSubtract = quantityToSubtract(parsedIngredient, stock.unit);
-    const actualRemoved = roundQty(Math.min(current, amountToSubtract), stock.unit);    const next = Math.max(0, roundQty(current - amountToSubtract, stock.unit));
-    const unitLabel = stock.unit ?? 'unité';
+    for (const stock of candidates) {
+      if (remainingToSubtract <= 0) break;
 
-    const updated = await updateStock(stock.id, { quantity: next });
-    if (updated) {
+      const current = stock.quantity ?? 0;
+      const unitLabel = stock.unit ?? 'unité';
+      const amountForThisStock = Math.min(current, remainingToSubtract);
+      const actualRemoved = roundQty(amountForThisStock, stock.unit);
+      const next = Math.max(0, roundQty(current - amountForThisStock, stock.unit));
+
+      const updated = await updateStock(stock.id, { quantity: next });
+      if (!updated) continue;
+
+      usedStockIds.add(stock.id);
+      removedSomething = true;
+      lastUnitLabel = unitLabel;
+
       const removedLabel = `${stock.product?.name ?? ingredient} (-${actualRemoved} ${unitLabel})`;
       decrementedProducts.push(removedLabel);
 
-      if (amountToSubtract > current) {
-        const missingAmount = roundQty(amountToSubtract - current, stock.unit);
-        missingIngredients.push(`${parsedIngredient.name} ${missingAmount} ${unitLabel}`);
-      }
+      remainingToSubtract = roundQty(remainingToSubtract - amountForThisStock, stock.unit);
+    }
+
+    if (!removedSomething) {
+      missingIngredients.push(ingredient);
+      continue;
+    }
+
+    if (remainingToSubtract > 0) {
+      missingIngredients.push(`${parsedIngredient.name} ${remainingToSubtract} ${lastUnitLabel}`);
     }
   }
   return { decremented: decrementedProducts, missing: missingIngredients };
