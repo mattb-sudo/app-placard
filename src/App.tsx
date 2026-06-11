@@ -3121,7 +3121,7 @@ const renderStockTab = () => {
 
     const stockNames = stocks
       .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
-      .map((s) => normalize(s.product!.name));
+      .map((s) => normalize(getProductMatchName(s.product!)));
 
     const hasIngredient = (ingredient: string) => {
       const key = normalize(ingredient);
@@ -3139,7 +3139,7 @@ const renderStockTab = () => {
         const status = getExpirationStatus(s.expiration_date, settings.soonDays);
         return status === 'soon' || status === 'expired';
       })
-      .map((s) => normalize(s.product!.name));
+      .map((s) => normalize(getProductMatchName(s.product!)));
 
     // ✅ IMPORTANT : recettes DB + catalogue d'exemples
     const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
