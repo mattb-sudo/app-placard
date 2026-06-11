@@ -45,6 +45,7 @@ type RecipeIngredient = {
 type Product = {
   id: string;
   name: string;
+  generic_name?: string | null;
   brand: string | null;
   category: string | null;
   sub_category: string | null; 
@@ -504,6 +505,7 @@ function App() {
 
   // Form stock
   const [name, setName] = useState('');
+  const [genericName, setGenericName] = useState('');
   const [brand, setBrand] = useState('');
   const [category, setCategory] = useState<MainCategory | ''>('');
   const [place, setPlace] = useState(DEFAULT_SETTINGS.defaultPlace);
@@ -530,6 +532,7 @@ function App() {
   const [editTarget, setEditTarget] = useState<StockItem | null>(null);
 
   const [editName, setEditName] = useState('');
+  const [editGenericName, setEditGenericName] = useState('');
   const [editBrand, setEditBrand] = useState('');
   const [editCategory, setEditCategory] = useState<MainCategory | ''>('');
   const [editPlace, setEditPlace] = useState('');
@@ -596,6 +599,7 @@ function App() {
         setEditTarget(item);
 
         setEditName(item.product?.name ?? '');
+        setEditGenericName(item.product?.generic_name ?? '');
         setEditBrand(item.product?.brand ?? '');
         setEditCategory((item.product?.category as MainCategory) ?? '');
         setEditSubCategory((item.product?.sub_category as SubCategory) ?? '');
@@ -629,6 +633,7 @@ function App() {
       .from('products')
       .update({
         name: editName.trim(),
+        generic_name: editGenericName.trim() || null,       
         brand: editBrand.trim() || null,
         category: editCategory ? editCategory : null,
         sub_category: getSubcatsFor(editCategory).length > 0 ? (editSubCategory || null) : null,
@@ -671,6 +676,7 @@ function App() {
                 ? {
                     ...s.product,
                     name: editName.trim(),
+                    generic_name: editGenericName.trim() || null,
                     brand: editBrand.trim() || null,
                     category: editCategory ? editCategory : null,
                     sub_category:
@@ -691,6 +697,7 @@ function App() {
           ? {
               ...p,
               name: editName.trim(),
+              generic_name: editGenericName.trim() || null,
               brand: editBrand.trim() || null,
               category: editCategory ? editCategory : null,
               barcode: editBarcode.trim() || null,
@@ -2631,6 +2638,16 @@ const renderStockTab = () => {
               onChange={(e) => setName(e.target.value)}
               className="field-input"
               placeholder="Pâtes, lait, riz..."
+            />
+          </div>
+
+          <div className="field-group full">
+            <label className="field-label">Nom pour recettes/courses</label>
+            <input
+              value={genericName}
+              onChange={(e) => setGenericName(e.target.value)}
+              className="field-input"
+              placeholder="Ex : moutarde, pâtes, lait..."
             />
           </div>
 
