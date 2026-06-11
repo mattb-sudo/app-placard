@@ -88,12 +88,14 @@ type Settings = {
   soonDays: number;
   recipesMaxMissing: number;
   defaultPlace: string;
+  dailyCalorieGoal: number;
 };
 
 const DEFAULT_SETTINGS: Settings = {
   soonDays: 7,
   recipesMaxMissing: 2,
   defaultPlace: 'Placard',
+  dailyCalorieGoal: 2200,
 };
 
 type MealSlot = 'breakfast' | 'lunch' | 'dinner';
@@ -410,13 +412,18 @@ function mealCalories(meal: WeekMeal, recipes: Recipe[], products: Product[]): n
   const r = recipes.find((x) => x.id === meal.recipe_id);
   if (!r) return null;
 
-  const kcalR = kcalForRecipe(r, products).kcal;
+  const recipeCalories = kcalForRecipe(r, products);
+
+  if (recipeCalories.kcal <= 0 && recipeCalories.missingCount > 0) {
+    return null;
+  }
+
   const recipeServ = r.servings ?? 1;
   const mealServ = meal.servings ?? 1;
 
   // kcal par portion * nb portions
-  return Math.round((kcalR / recipeServ) * mealServ);
-}
+  return Math.round((recipeCalories.kcal / recipeServ) * mealServ);
+  }
 
 function toDateKey(d: Date): string {
   const yyyy = d.getFullYear();
@@ -593,6 +600,10 @@ function App() {
           typeof parsed.defaultPlace === 'string' && parsed.defaultPlace.trim()
             ? parsed.defaultPlace
             : prev.defaultPlace,
+        dailyCalorieGoal:
+          typeof parsed.dailyCalorieGoal === 'number'
+            ? parsed.dailyCalorieGoal
+            : prev.dailyCalorieGoal,
       }));
     } catch (e) {
       console.error(e);
@@ -1755,6 +1766,31 @@ const todayCalories = consumedTodayMeals.reduce((total, item) => {
   return total + (kcal ?? 0);
 }, 0);
 
+const plannedTodayMeals = todayMeals.filter(({ meal }) => meal && !meal.consumed_at);
+
+const plannedTodayCalories = plannedTodayMeals.reduce((total, item) => {
+  if (!item.meal) return total;
+  const kcal = mealCalories(item.meal, dbRecipes, products);
+  return total + (kcal ?? 0);
+}, 0);
+
+const projectedTodayCalories = todayCalories + plannedTodayCalories;
+
+const todayCaloriesPercent =
+  settings.dailyCalorieGoal > 0
+    ? Math.min(100, Math.round((todayCalories / settings.dailyCalorieGoal) * 100))
+    : 0;
+
+
+const remainingCalories = settings.dailyCalorieGoal - todayCalories;
+
+const todayCaloriesStatus =
+  settings.dailyCalorieGoal <= 0
+    ? 'Objectif désactivé'
+    : remainingCalories >= 0
+      ? `${remainingCalories} kcal restantes`
+      : `${Math.abs(remainingCalories)} kcal au-dessus`;
+
 const lowStockList = inStock
   .filter((item) => (item.quantity ?? 0) <= stepForUnit(item.unit))
   .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? ''));
@@ -2100,7 +2136,11 @@ const renderWeekMenuTab = () => {
                           <div className="meal-mini-title">{cell.recipe_name}</div>
                           {(() => {
                             const kcal = mealCalories(cell, dbRecipes, products);
-                            return kcal != null ? <div className="meal-mini-meta">🔥 {kcal} kcal</div> : null;
+                            return (
+                              <div className="meal-mini-meta">
+                                {kcal != null ? `🔥 ${kcal} kcal` : 'Calories à compléter'}
+                              </div>
+                            );
                           })()}
                           <div className="meal-mini-meta">
                             {cell.servings ? `${cell.servings} pers.` : ''}
@@ -2538,7 +2578,24 @@ const renderStockTab = () => {
         <div className="stat-card">
           <div className="stat-label">Calories aujourd'hui</div>
           <div className="stat-value">{todayCalories}</div>
-          <div className="stat-foot">Repas validés aujourd'hui</div>
+          <div className="stat-foot">
+            Objectif {settings.dailyCalorieGoal} kcal · {todayCaloriesPercent}%
+          </div>
+          <div className={remainingCalories >= 0 ? 'stat-foot' : 'stat-foot stat-foot-danger'}>
+            {todayCaloriesStatus}
+          </div>
+          <div className="stat-progress">
+            <div
+              className={remainingCalories >= 0 ? 'stat-progress-fill' : 'stat-progress-fill stat-progress-fill-danger'}
+              style={{ width: `${todayCaloriesPercent}%` }}
+            />
+          </div>
+          {plannedTodayCalories > 0 && (
+            <div className="stat-foot">
+              Prévu : +{plannedTodayCalories} kcal · total {projectedTodayCalories} kcal
+            </div>
+          )}
+
         </div>
       </section>
 
@@ -2661,12 +2718,18 @@ const renderStockTab = () => {
               <li key={slot.key} className="dashboard-meal-item">
                 <span className="dashboard-meal-slot">{slot.label}</span>
                 <span className="dashboard-meal-name">{meal?.recipe_name ?? '-'}</span>
-                {meal?.consumed_at && <span className="dashboard-meal-status">Validé</span>}
+                {meal && (
+                  <span className={meal.consumed_at ? 'dashboard-meal-status' : 'dashboard-meal-status dashboard-meal-status--planned'}>
+                    {meal.consumed_at ? 'Validé' : 'Prévu'}
+                  </span>
+                )}
                 {meal && (() => {
                   const kcal = mealCalories(meal, dbRecipes, products);
-                  return kcal != null ? (
-                    <span className="dashboard-meal-kcal">{kcal} kcal</span>
-                  ) : null;
+                  return (
+                    <span className="dashboard-meal-kcal">
+                      {kcal != null ? `${kcal} kcal` : 'kcal à compléter'}
+                    </span>
+                  );
                 })()}
               </li>
             ))}
@@ -2917,7 +2980,7 @@ const renderStockTab = () => {
     );
 
     const plannedMissingNames = new Set<string>();
-    const plannedMissingLabelsByName = new Map<string, string>();
+    const plannedMissingIngredientsByName = new Map<string, RecipeIngredient[]>();
 
     const stockQuantityForShoppingIngredient = (stock: StockItem, ingredient: RecipeIngredient): number | null => {
       const qty = stock.quantity ?? 0;
@@ -2940,25 +3003,65 @@ const renderStockTab = () => {
       return null;
     };
 
-    const hasEnoughShoppingIngredient = (ingredient: RecipeIngredient) => {
+    const matchingStocksForShoppingIngredient = (ingredient: RecipeIngredient) => {
       const key = normalizeText(ingredient.name);
-      if (!key) return false;
+      if (!key) return [];
 
-      const matchingStocks = stocks.filter((stock) => {
+      return stocks.filter((stock) => {
         if ((stock.quantity ?? 0) <= 0 || !stock.product?.name) return false;
         const productName = normalizeText(getProductMatchName(stock.product));
         return productName.includes(key) || key.includes(productName);
       });
+    };
 
-      if (matchingStocks.length === 0) return false;
-      if (ingredient.amount == null || !ingredient.unit) return true;
+    const getMissingShoppingIngredient = (ingredient: RecipeIngredient): RecipeIngredient | null => {
+      const matchingStocks = matchingStocksForShoppingIngredient(ingredient);
+
+      if (matchingStocks.length === 0) return ingredient;
+      if (ingredient.amount == null || !ingredient.unit) return null;
 
       const available = matchingStocks.reduce((total, stock) => {
         const converted = stockQuantityForShoppingIngredient(stock, ingredient);
         return converted == null ? total : total + converted;
       }, 0);
 
-      return available >= ingredient.amount;
+      const missingAmount = roundQty(ingredient.amount - available, ingredient.unit);
+      if (missingAmount <= 0) return null;
+
+      return { ...ingredient, amount: missingAmount };
+    };
+
+    const addPlannedMissingIngredient = (ingredient: RecipeIngredient) => {
+      const key = normalizeText(ingredient.name);
+      if (!key) return;
+
+      plannedMissingNames.add(key);
+
+      const current = plannedMissingIngredientsByName.get(key) ?? [];
+
+      if (ingredient.amount != null && ingredient.unit) {
+        const sameUnitIndex = current.findIndex(
+          (item) => item.amount != null && item.unit === ingredient.unit,
+        );
+
+        if (sameUnitIndex >= 0) {
+          const copy = [...current];
+          const existing = copy[sameUnitIndex];
+
+          copy[sameUnitIndex] = {
+            ...existing,
+            amount: roundQty((existing.amount ?? 0) + ingredient.amount, ingredient.unit),
+          };
+
+          plannedMissingIngredientsByName.set(key, copy);
+          return;
+        }
+      }
+
+      const label = formatRecipeIngredient(ingredient);
+      if (current.some((item) => formatRecipeIngredient(item) === label)) return;
+
+      plannedMissingIngredientsByName.set(key, [...current, ingredient]);
     };
 
     for (const meal of weekMeals) {
@@ -2966,12 +3069,10 @@ const renderStockTab = () => {
 
       for (const ingredient of meal.ingredients) {
         const parsed = parseSingleMealIngredient(ingredient);
-        const key = normalizeText(getShoppingKeywordFromIngredient(ingredient));
-        if (!key) continue;
+        const missingIngredient = getMissingShoppingIngredient(parsed);
 
-        if (!hasEnoughShoppingIngredient(parsed)) {
-          plannedMissingNames.add(key);
-          plannedMissingLabelsByName.set(key, formatRecipeIngredient(parsed));
+        if (missingIngredient) {
+          addPlannedMissingIngredient(missingIngredient);
         }
       }
     }
@@ -3030,7 +3131,11 @@ const renderStockTab = () => {
 
     const getPlannedMissingLabel = (product: Product) => {
       const key = normalizeText(getProductMatchName(product));
-      return plannedMissingLabelsByName.get(key);
+      const planned = plannedMissingIngredientsByName.get(key);
+
+      if (!planned || planned.length === 0) return null;
+
+      return planned.map(formatRecipeIngredient).join(', ');
     };
 
     const sortedCurrentList = [...currentList].sort(
@@ -3186,6 +3291,32 @@ const renderStockTab = () => {
                 setSettings((prev) => ({
                   ...prev,
                   recipesMaxMissing: Number.isFinite(v) ? v : prev.recipesMaxMissing,
+                }));
+                setSettingsInfo(null);
+              }}
+              className="field-input"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: '0.9rem' }}>
+        <h2 className="section-title">Calories</h2>
+        <p className="section-subtitle">Objectif quotidien affiché sur le tableau de bord.</p>
+
+        <div className="form-grid">
+          <div className="field-group">
+            <label className="field-label">Objectif calories par jour</label>
+            <input
+              type="number"
+              min={0}
+              step={50}
+              value={settings.dailyCalorieGoal}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSettings((prev) => ({
+                  ...prev,
+                  dailyCalorieGoal: Number.isFinite(v) ? v : prev.dailyCalorieGoal,
                 }));
                 setSettingsInfo(null);
               }}

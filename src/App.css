@@ -274,10 +274,33 @@ body {
   color: #dc2626;
 }
 
+.stat-foot-danger {
+  color: #dc2626;
+  font-weight: 600;
+}
+
 .stat-foot {
   margin-top: 0.1rem;
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.stat-progress {
+  height: 6px;
+  margin-top: 0.45rem;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.stat-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #16a34a;
+}
+
+.stat-progress-fill-danger {
+  background: #dc2626;
 }
 
 /* Chips */
@@ -1137,6 +1160,10 @@ body {
   font-size: 0.78rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.dashboard-meal-status--planned {
+  color: #92400e;
 }
 
 .dashboard-meal-kcal {
