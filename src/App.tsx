@@ -69,6 +69,7 @@ type StockItem = {
   unit: string | null;
   expiration_date: string | null;
   expiration_type: ExpirationType;
+  is_open: boolean;
   product: Product | null;
 };
 
@@ -279,20 +280,23 @@ function mapOffCategoryToMainCategory(offCat: string): MainCategory {
 const UNIT_OPTIONS = [
   { value: 'unité', label: 'unité' },
   { value: 'g', label: 'g' },
+  { value: 'ml', label: 'ml' },
   { value: 'l', label: 'l' },
 ] as const;
 
 function stepForUnit(unit: string | null): number {
   const u = (unit ?? 'unité').toLowerCase();
-  if (u === 'g') return 50;       // +50g
-  if (u === 'l') return 0.05;     // +0.05L (= 50ml)
-  return 1;                       // +1 unité
+  if (u === 'g') return 50;
+  if (u === 'ml') return 50;
+  if (u === 'l') return 0.05;
+  return 1;                     // +1 unité
 }
 
 function roundQty(value: number, unit: string | null): number {
   const u = (unit ?? 'unité').toLowerCase();
-  if (u === 'l') return Math.round(value * 100) / 100; // 2 décimales
-  return Math.round(value * 10) / 10;                  // safe (0.1) si besoin
+  if (u === 'l') return Math.round(value * 100) / 100;
+  if (u === 'ml') return Math.round(value);
+  return Math.round(value * 10) / 10;
 }
 
 function toNum(v: any): number | null {
@@ -309,6 +313,11 @@ function gramsFromStock(item: StockItem): { grams: number | null; approx: boolea
   const unit = (item.unit ?? 'unité').toLowerCase();
 
   if (unit === 'g') return { grams: qty, approx: false };
+
+  if (unit === 'ml') {
+    const density = p.density_g_ml ?? 1;
+    return { grams: qty * density, approx: p.density_g_ml == null };
+  }
 
   // litre -> ml -> g (via densité)
   if (unit === 'l') {
@@ -477,6 +486,7 @@ function quantityToSubtract(ingredient: RecipeIngredient, stockUnit: string | nu
 
   if (ingredient.unit === 'g' && unit === 'g') return ingredient.amount;
   if (ingredient.unit === 'ml' && unit === 'l') return ingredient.amount / 1000;
+  if (ingredient.unit === 'ml' && unit === 'ml') return ingredient.amount;
   if (ingredient.unit === 'unité' && unit === 'unité') return ingredient.amount;
 
   return stepForUnit(stockUnit);
@@ -517,6 +527,7 @@ function App() {
   const [unit, setUnit] = useState('unité');
   const [expiration, setExpiration] = useState('');
   const [expirationType, setExpirationType] = useState<ExpirationType>('dlc');
+  const [isOpen, setIsOpen] = useState(false);
   const [barcode, setBarcode] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
@@ -544,6 +555,7 @@ function App() {
   const [editUnit, setEditUnit] = useState('unité');
   const [editExpiration, setEditExpiration] = useState(''); // '' => null
   const [editExpirationType, setEditExpirationType] = useState<ExpirationType>('dlc');
+  const [editIsOpen, setEditIsOpen] = useState(false);
   const [editBarcode, setEditBarcode] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
@@ -612,6 +624,7 @@ function App() {
         setEditUnit(item.unit ?? 'unité');
         setEditExpiration(item.expiration_date ?? ''); // '' si null
         setEditExpirationType(item.expiration_type ?? 'dlc');
+        setEditIsOpen(!!item.is_open);
         setEditBarcode(item.product?.barcode ?? '');
         setEditKcal100g(item.product?.kcal_100g != null ? String(item.product.kcal_100g) : '');
         setEditGramsPerUnit(item.product?.grams_per_unit_g != null ? String(item.product.grams_per_unit_g) : '');
@@ -662,9 +675,10 @@ function App() {
         unit: editUnit || 'unité',
         expiration_date: editExpiration ? editExpiration : null, // ✅ supprimable
         expiration_type: editExpiration ? editExpirationType : 'unknown',
+        is_open: editIsOpen,
       })
       .eq('id', stockId)
-      .select('id, place, quantity, unit, expiration_date, expiration_type')
+      .select('id, place, quantity, unit, expiration_date, expiration_type, is_open')
       .single();
 
     if (stockErr || !stockRow) throw stockErr;
@@ -995,6 +1009,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
           unit,
           expiration_date,
           expiration_type,
+          is_open,
           product:products (
             id,
             name,
@@ -1027,6 +1042,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
             unit: row.unit,
             expiration_date: row.expiration_date,
             expiration_type: (row.expiration_type as ExpirationType) ?? 'dlc',
+            is_open: !!row.is_open,
             product: product
               ? {
                   id: product.id,
@@ -1361,10 +1377,11 @@ const unhideFromShopping = async (productId: string) => {
     // 2) merge same stock line
     let stockQuery = supabase
       .from('stocks')
-      .select(`id,place,quantity,unit,expiration_date,expiration_type`)
+      .select(`id,place,quantity,unit,expiration_date,expiration_type,is_open`)
       .eq('product_id', productId)
       .eq('place', trimmedPlace)
-      .eq('unit', trimmedUnit);
+      .eq('unit', trimmedUnit)
+      .eq('is_open', isOpen);
 
     if (expiration) {
       stockQuery = stockQuery
@@ -1392,7 +1409,7 @@ const unhideFromShopping = async (productId: string) => {
         .eq('id', existing.id)
         .select(
           `
-          id, place, quantity, unit, expiration_date, expiration_type,
+          id, place, quantity, unit, expiration_date, expiration_type,is_open,
           product:products (
             id, name,generic_name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
@@ -1412,10 +1429,11 @@ const unhideFromShopping = async (productId: string) => {
           unit: trimmedUnit || null,
           expiration_date: expiration || null,
           expiration_type: expiration ? expirationType : 'unknown',
+          is_open: isOpen,
         })
         .select(
           `
-          id, place, quantity, unit, expiration_date, expiration_type,
+          id, place, quantity, unit, expiration_date, expiration_type,is_open,
           product:products (
             id, name,generic_name, brand, category, sub_category, default_unit, barcode,shopping_hidden, is_main, kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml
           )
@@ -1437,6 +1455,7 @@ const unhideFromShopping = async (productId: string) => {
       unit: finalStockRow.unit,
       expiration_date: finalStockRow.expiration_date,
       expiration_type: (finalStockRow.expiration_type as ExpirationType) ?? 'dlc',
+      is_open: !!finalStockRow.is_open,
       product: product
       ? {
           id: product.id,
@@ -1477,6 +1496,7 @@ const unhideFromShopping = async (productId: string) => {
     setUnit('unité');
     setExpiration('');
     setExpirationType('dlc');
+    setIsOpen(false);
     setBarcode('');
     setSubCategory('');
     setKcal100g('');
@@ -1611,14 +1631,13 @@ const ddmExceededList = inStock
   .filter((i) => getExpirationStatus(i.expiration_date, settings.soonDays) === 'expired')
   .sort((a, b) => (a.expiration_date ?? '').localeCompare(b.expiration_date ?? ''));
 
-  const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date' | 'expiration_type'>>) => {
-  setError(null);
+  const updateStock = async (stockId: string, patch: Partial<Pick<StockItem, 'quantity' | 'unit' | 'place' | 'expiration_date' | 'expiration_type' | 'is_open'>>) => {
 
   const { data, error } = await supabase
     .from('stocks')
     .update(patch)
     .eq('id', stockId)
-    .select('id, place, quantity, unit, expiration_date, expiration_type')
+    .select(`id,place,quantity,unit,expiration_date,expiration_type,is_open`)
     .single();
 
   if (error || !data) {
@@ -1656,13 +1675,19 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
         return productName.includes(key) || key.includes(productName);
       })
       .sort((a, b) => {
-        const statusA = getExpirationStatus(a.expiration_date, settings.soonDays);
-        const statusB = getExpirationStatus(b.expiration_date, settings.soonDays);
+        const score = (stock: StockItem) => {
+          const status = getExpirationStatus(stock.expiration_date, settings.soonDays);
 
-        const score = (status: ExpirationStatus) =>
-          status === 'expired' ? 0 : status === 'soon' ? 1 : 2;
+          if (status === 'expired' && stock.expiration_type === 'dlc') return 0;
+          if (status === 'expired') return 1;
+          if (status === 'soon') return 2;
+          if (stock.is_open) return 3;
 
-        if (score(statusA) !== score(statusB)) return score(statusA) - score(statusB);
+          return 4;
+        };
+
+        const scoreDiff = score(a) - score(b);
+        if (scoreDiff !== 0) return scoreDiff;
 
         return (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
       });
@@ -1729,17 +1754,27 @@ const lowStockList = inStock
   .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? ''));
 
 
+const getPriorityScore = (item: StockItem) => {
+  const status = getExpirationStatus(item.expiration_date, settings.soonDays);
+
+  if (status === 'expired' && item.expiration_type === 'dlc') return 0;
+  if (status === 'expired') return 1;
+  if (status === 'soon') return 2;
+  if (item.is_open) return 3;
+
+  return 4;
+};
+
 const priorityList = inStock
   .filter((item) => {
     const status = getExpirationStatus(item.expiration_date, settings.soonDays);
-    return status === 'expired' || status === 'soon';
+    return status === 'expired' || status === 'soon' || item.is_open;
   })
   .sort((a, b) => {
-    const statusA = getExpirationStatus(a.expiration_date, settings.soonDays);
-    const statusB = getExpirationStatus(b.expiration_date, settings.soonDays);
+    const scoreDiff = getPriorityScore(a) - getPriorityScore(b);
+    if (scoreDiff !== 0) return scoreDiff;
 
-    if (statusA !== statusB) return statusA === 'expired' ? -1 : 1;
-    return (a.expiration_date ?? '').localeCompare(b.expiration_date ?? '');
+    return (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
   })
   .slice(0, 6);
 
@@ -1958,7 +1993,7 @@ const renderWeekMenuTab = () => {
 
     const stockNames = stocks
       .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
-      .map((s) => normalize(s.product!.name));
+      .map((s) => normalize(getProductMatchName(s.product!)));
 
     const hasIngredient = (ingredient: string) => {
       const key = normalize(ingredient);
@@ -2249,6 +2284,7 @@ const renderStockTab = () => {
             <th>Quantité</th>
             <th>Unité</th>
             <th>Péremption</th>
+            <th>État</th>
             <th>Statut</th>
             <th>Actions</th>
           </tr>
@@ -2338,6 +2374,18 @@ const renderStockTab = () => {
                 </td>
 
                 <td>{exp}</td>
+
+                <td>
+                  <button
+                    type="button"
+                    className={`status-pill status-pill-button ${item.is_open ? 'status-soon' : 'status-ok'}`}
+                    onClick={() => void updateStock(item.id, { is_open: !item.is_open })}
+                    title={item.is_open ? 'Marquer comme non ouvert' : 'Marquer comme ouvert'}
+                  >
+                    <span className="status-dot" />
+                    {item.is_open ? 'Ouvert' : 'Non ouvert'}
+                  </button>
+                </td>
 
                 <td>
                   <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
@@ -2499,6 +2547,8 @@ const renderStockTab = () => {
             {priorityList.map((item) => {
               const status = getExpirationStatus(item.expiration_date, settings.soonDays);
               const labelStatus = getExpirationLabel(status, item.expiration_type);
+              const displayStatusLabel = status === 'ok' && item.is_open ? 'Ouvert' : labelStatus;
+              const displayStatusClass = status === 'ok' && item.is_open ? 'status-soon' : getExpirationClass(status, item.expiration_type);
 
               return (
                 <li key={item.id} className="priority-item">
@@ -2506,12 +2556,13 @@ const renderStockTab = () => {
                     <span className="priority-title">{item.product?.name ?? 'Produit'}</span>
                     <span className="priority-meta">
                       {item.place || 'Lieu non précisé'} · {item.quantity ?? 0} {item.unit ?? 'unité'}
+                      {item.is_open ? ' · Ouvert' : ''}
                     </span>
                   </div>
 
-                  <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
+                  <span className={`status-pill ${displayStatusClass}`}>
                     <span className="status-dot" />
-                    {labelStatus}
+                    {displayStatusLabel}
                   </span>
                 </li>
               );
@@ -2824,6 +2875,18 @@ const renderStockTab = () => {
             </select>
           </div>
 
+          <div className="field-group">
+            <label className="field-label">État</label>
+            <select
+              className="field-input"
+              value={isOpen ? 'open' : 'closed'}
+              onChange={(e) => setIsOpen(e.target.value === 'open')}
+            >
+              <option value="closed">Non ouvert</option>
+              <option value="open">Ouvert</option>
+            </select>
+          </div>
+
           <div className="form-actions">
             <button type="submit" className="btn-primary">
               Ajouter au stock
@@ -3119,38 +3182,78 @@ const renderStockTab = () => {
     const normalize = (s: string) =>
       s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-    const stockNames = stocks
-      .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
-      .map((s) => normalize(getProductMatchName(s.product!)));
+    const matchingStocksForIngredient = (ingredientName: string) => {
+      const key = normalize(ingredientName);
+      if (!key) return [];
 
-    const hasIngredient = (ingredient: string) => {
-      const key = normalize(ingredient);
-      return stockNames.some((n) => n.includes(key));
+      return stocks
+        .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
+        .filter((s) => {
+          const productName = normalize(getProductMatchName(s.product!));
+          return productName.includes(key) || key.includes(productName);
+        });
     };
 
-    const usesUrgentIngredient = (ingredient: string) => {
-      const key = normalize(ingredient);
-      return urgentStockNames.some((n) => n.includes(key));
+    const stockQuantityInIngredientUnit = (stock: StockItem, ingredient: RecipeIngredient): number | null => {
+      const qty = stock.quantity ?? 0;
+      const stockUnit = (stock.unit ?? 'unité').toLowerCase();
+
+      if (ingredient.unit === 'g') {
+        if (stockUnit === 'g') return qty;
+        if (stockUnit === 'unité' && stock.product?.grams_per_unit_g) {
+          return qty * stock.product.grams_per_unit_g;
+        }
+      }
+
+      if (ingredient.unit === 'ml') {
+        if (stockUnit === 'l') return qty * 1000;
+        if (stockUnit === 'ml') return qty;
+      }
+
+      if (ingredient.unit === 'unité') {
+        if (stockUnit === 'unité') return qty;
+      }
+
+      return null;
+    };
+
+    const hasEnoughIngredient = (ingredient: RecipeIngredient) => {
+      const matchingStocks = matchingStocksForIngredient(ingredient.name);
+      if (matchingStocks.length === 0) return false;
+
+      if (ingredient.amount == null || !ingredient.unit) return true;
+
+      const available = matchingStocks.reduce((total, stock) => {
+        const converted = stockQuantityInIngredientUnit(stock, ingredient);
+        return converted == null ? total : total + converted;
+      }, 0);
+
+      return available >= ingredient.amount;
     };
 
     const urgentStockNames = stocks
       .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name)
       .filter((s) => {
         const status = getExpirationStatus(s.expiration_date, settings.soonDays);
-        return status === 'soon' || status === 'expired';
+        return status === 'soon' || status === 'expired' || s.is_open;
       })
       .map((s) => normalize(getProductMatchName(s.product!)));
+
+    const usesUrgentIngredient = (ingredient: RecipeIngredient) => {
+      const key = normalize(ingredient.name);
+      return urgentStockNames.some((n) => n.includes(key) || key.includes(n));
+    };
 
     // ✅ IMPORTANT : recettes DB + catalogue d'exemples
     const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
 
     const enriched = allRecipes.map((r) => {
       const missing = r.ingredients
-        .filter((ing: RecipeIngredient) => !hasIngredient(ing.name))
+        .filter((ing: RecipeIngredient) => !hasEnoughIngredient(ing))
         .map((ing: RecipeIngredient) => ing.name);
 
       const urgentIngredients = r.ingredients
-        .filter((ing: RecipeIngredient) => hasIngredient(ing.name) && usesUrgentIngredient(ing.name))
+        .filter((ing: RecipeIngredient) => hasEnoughIngredient(ing) && usesUrgentIngredient(ing))
         .map((ing: RecipeIngredient) => ing.name);
 
       const missingCount = missing.length;
@@ -3175,7 +3278,7 @@ const renderStockTab = () => {
 
     const headerSubtitle =
       recipesSubTab === 'feasible'
-        ? `Basé sur ton stock actuel. On accepte jusqu’à ${settings.recipesMaxMissing} ingrédients manquants.`
+        ? `Basé sur ton stock actuel, les produits ouverts et les dates proches. On accepte jusqu’à ${settings.recipesMaxMissing} ingrédients manquants.`
         : 'Catalogue de recettes (exemples) séparées en sucré / salé.';
 
     const renderRecipeCard = (r: any) => {
@@ -3225,7 +3328,7 @@ const renderStockTab = () => {
           <p className="recipe-subtitle">Ingrédients :</p>
           <ul className="recipe-list">
             {r.ingredients.map((ing: RecipeIngredient) => {
-              const ok = hasIngredient(ing.name);
+              const ok = hasEnoughIngredient(ing);
               return (
                 <li key={`${r.id}-${ing.name}`} className={ok ? 'ing-ok' : 'ing-missing'}>
                   {ok ? '✅ ' : '❌ '}
@@ -3496,6 +3599,18 @@ const renderStockTab = () => {
             <option value="unknown">Inconnu</option>
           </select>
         </div>
+
+        <div className="field-group">
+          <label className="field-label">État</label>
+          <select
+            className="field-input"
+            value={editIsOpen ? 'open' : 'closed'}
+            onChange={(e) => setEditIsOpen(e.target.value === 'open')}
+          >
+            <option value="closed">Non ouvert</option>
+            <option value="open">Ouvert</option>
+          </select>
+        </div>    
 
         <div className="field-group full">
           <label className="field-label">Code-barres</label>

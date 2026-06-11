@@ -509,6 +509,15 @@ body {
   border: 1px solid transparent;
 }
 
+.status-pill-button {
+  cursor: pointer;
+  font: inherit;
+}
+
+.status-pill-button:hover {
+  filter: brightness(0.97);
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
