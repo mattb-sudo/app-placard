@@ -1511,8 +1511,13 @@ const unhideFromShopping = async (productId: string) => {
   // ---------- Shopping helpers ----------
   const recipeKindToCategory = (kind: RecipeKind) => (kind === 'sweet' ? 'Produit sucré' : 'Produit salé');
 
+const getShoppingKeywordFromIngredient = (ingredient: string) => {
+  const parsed = parseSingleMealIngredient(ingredient);
+  return parsed.name.trim() || ingredient.trim();
+};
+
   const findExistingProductForKeyword = (keyword: string) => {
-    const key = normalizeText(keyword);
+    const key = normalizeText(getShoppingKeywordFromIngredient(keyword));
     return products.find((p) => {
       const pn = normalizeText(getProductMatchName(p));
       return pn === key || pn.includes(key) || key.includes(pn);
@@ -1520,7 +1525,8 @@ const unhideFromShopping = async (productId: string) => {
   };
 
   const ensureProductExistsForShopping = async (keyword: string, kind: RecipeKind) => {
-    const local = findExistingProductForKeyword(keyword);
+    const cleanKeyword = getShoppingKeywordFromIngredient(keyword);
+    const local = findExistingProductForKeyword(cleanKeyword);
     if (local) return { product: local, created: false };
 
     const category = recipeKindToCategory(kind);
@@ -1528,8 +1534,8 @@ const unhideFromShopping = async (productId: string) => {
     const { data: created, error: createError } = await supabase
       .from('products')
       .insert({
-        name: keyword,
-        generic_name: keyword,
+        name: cleanKeyword,
+        generic_name: cleanKeyword,
         brand: null,
         category,
         sub_category: null,
@@ -2911,20 +2917,62 @@ const renderStockTab = () => {
     );
 
     const plannedMissingNames = new Set<string>();
+    const plannedMissingLabelsByName = new Map<string, string>();
+
+    const stockQuantityForShoppingIngredient = (stock: StockItem, ingredient: RecipeIngredient): number | null => {
+      const qty = stock.quantity ?? 0;
+      const stockUnit = (stock.unit ?? 'unité').toLowerCase();
+
+      if (ingredient.unit === 'g') {
+        if (stockUnit === 'g') return qty;
+        if (stockUnit === 'unité' && stock.product?.grams_per_unit_g) {
+          return qty * stock.product.grams_per_unit_g;
+        }
+      }
+
+      if (ingredient.unit === 'ml') {
+        if (stockUnit === 'ml') return qty;
+        if (stockUnit === 'l') return qty * 1000;
+      }
+
+      if (ingredient.unit === 'unité' && stockUnit === 'unité') return qty;
+
+      return null;
+    };
+
+    const hasEnoughShoppingIngredient = (ingredient: RecipeIngredient) => {
+      const key = normalizeText(ingredient.name);
+      if (!key) return false;
+
+      const matchingStocks = stocks.filter((stock) => {
+        if ((stock.quantity ?? 0) <= 0 || !stock.product?.name) return false;
+        const productName = normalizeText(getProductMatchName(stock.product));
+        return productName.includes(key) || key.includes(productName);
+      });
+
+      if (matchingStocks.length === 0) return false;
+      if (ingredient.amount == null || !ingredient.unit) return true;
+
+      const available = matchingStocks.reduce((total, stock) => {
+        const converted = stockQuantityForShoppingIngredient(stock, ingredient);
+        return converted == null ? total : total + converted;
+      }, 0);
+
+      return available >= ingredient.amount;
+    };
 
     for (const meal of weekMeals) {
       if (!meal.ingredients || meal.consumed_at) continue;
 
       for (const ingredient of meal.ingredients) {
-        const key = normalizeText(ingredient);
+        const parsed = parseSingleMealIngredient(ingredient);
+        const key = normalizeText(getShoppingKeywordFromIngredient(ingredient));
+        if (!key) continue;
 
-        const hasStock = stocks.some((stock) => {
-          if ((stock.quantity ?? 0) <= 0 || !stock.product?.name) return false;
-          const productName = normalizeText(getProductMatchName(stock.product));
-          return productName.includes(key) || key.includes(productName);
-        });
-
-        if (!hasStock) plannedMissingNames.add(key);
+        if (!hasEnoughShoppingIngredient(parsed)) {
+          plannedMissingNames.add(key);
+          plannedMissingLabelsByName.set(key, formatRecipeIngredient(parsed));
+        }
       }
     }
 
@@ -2942,7 +2990,12 @@ const renderStockTab = () => {
 
     const presentProductIds = new Set(
       inStock
-        .filter((s) => s.product?.id && !lowStockProductIds.has(s.product.id))
+        .filter(
+          (s) =>
+            s.product?.id &&
+            !lowStockProductIds.has(s.product.id) &&
+            !plannedMissingProductIds.has(s.product.id),
+        )
         .map((s) => s.product!.id),
     );
 
@@ -2973,6 +3026,11 @@ const renderStockTab = () => {
       if (reason === 'Stock faible') return 'shopping-product-reason--low';
       if (reason === 'Repas planifié') return 'shopping-product-reason--planned';
       return 'shopping-product-reason--absent';
+    };
+
+    const getPlannedMissingLabel = (product: Product) => {
+      const key = normalizeText(getProductMatchName(product));
+      return plannedMissingLabelsByName.get(key);
     };
 
     const sortedCurrentList = [...currentList].sort(
@@ -3049,6 +3107,11 @@ const renderStockTab = () => {
                         <li key={p.id} className="shopping-list-item">
                           <span className="shopping-product-name">{p.name}</span>
                           {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
+                          {getPlannedMissingLabel(p) && (
+                            <span className="shopping-product-brand">
+                              À prévoir : {getPlannedMissingLabel(p)}
+                            </span>
+                          )}
                           <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          
                           <button
                             type="button"
