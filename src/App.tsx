@@ -216,6 +216,10 @@ function normalizeText(s: string): string {
     .trim();
 }
 
+function getProductMatchName(product: Product): string {
+  return product.generic_name?.trim() || product.name;
+}
+
 function cleanBarcode(raw: string): string {
   return String(raw).replace(/[^\d]/g, '').trim();
 }
@@ -338,7 +342,7 @@ function findProductForIngredient(products: Product[], name: string): Product | 
   // match simple sur le nom
   return (
     products.find((p) => {
-      const pn = normalizeText(p.name);
+      const pn = normalizeText(getProductMatchName(p));
       return pn === key || pn.includes(key) || key.includes(pn);
     }) ?? null
   );
@@ -1490,7 +1494,7 @@ const unhideFromShopping = async (productId: string) => {
   const findExistingProductForKeyword = (keyword: string) => {
     const key = normalizeText(keyword);
     return products.find((p) => {
-      const pn = normalizeText(p.name);
+      const pn = normalizeText(getProductMatchName(p));
       return pn === key || pn.includes(key) || key.includes(pn);
     });
   };
@@ -1648,7 +1652,7 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
     const candidates = stocks
       .filter((s) => (s.quantity ?? 0) > 0 && s.product?.name && !usedStockIds.has(s.id))
       .filter((s) => {
-        const productName = normalizeText(s.product!.name);
+        const productName = normalizeText(getProductMatchName(s.product!));
         return productName.includes(key) || key.includes(productName);
       })
       .sort((a, b) => {
@@ -2853,7 +2857,7 @@ const renderStockTab = () => {
 
         const hasStock = stocks.some((stock) => {
           if ((stock.quantity ?? 0) <= 0 || !stock.product?.name) return false;
-          const productName = normalizeText(stock.product.name);
+          const productName = normalizeText(getProductMatchName(stock.product));
           return productName.includes(key) || key.includes(productName);
         });
 
@@ -2869,7 +2873,7 @@ const renderStockTab = () => {
 
     const plannedMissingProductIds = new Set(
       products
-        .filter((product) => plannedMissingNames.has(normalizeText(product.name)))
+        .filter((product) => plannedMissingNames.has(normalizeText(getProductMatchName(product))))
         .map((product) => product.id),
     );
 
