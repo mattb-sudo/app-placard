@@ -827,6 +827,21 @@ body {
   font-size: 0.86rem;
 }
 
+.shopping-list-item--checked {
+  opacity: 0.55;
+}
+
+.shopping-list-item--checked .shopping-product-name,
+.shopping-list-item--checked .shopping-product-brand {
+  text-decoration: line-through;
+}
+
+.shopping-product-reason--combo {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #86efac;
+}
+
 .shopping-list-item:last-child {
   border-bottom: none;
 }

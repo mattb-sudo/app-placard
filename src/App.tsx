@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { supabase } from './supabaseClient';
 import { BarcodeScanner } from './BarcodeScanner';
 import './App.css';
 
 type Tab = 'dashboard' | 'stock' | 'history' | 'weekmenu' | 'shopping' | 'recipes' | 'settings';
+type StockFilter = 'all' | 'soon' | 'expired' | 'expired-dlc' | 'expired-ddm' | 'open' | 'low';
+type ShoppingFilter = 'all' | 'low' | 'planned' | 'absent';
+type StockSort = 'expiration' | 'name' | 'quantity' | 'place';
+type StockSortDirection = 'asc' | 'desc';
+type RecipeFilter = 'all' | 'ready' | 'urgent' | 'missing';
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
 type ExpirationType = 'dlc' | 'ddm' | 'unknown';
 
@@ -121,50 +126,86 @@ type WeekMeal = {
 };
 
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
+const SHOPPING_CHECKED_STORAGE_KEY = 'pantrypilot_checked_shopping_v1';
 
 const si = (...names: string[]): RecipeIngredient[] =>
   names.map((n) => ({ name: n, amount: null, unit: null }));
 
+const qi = (name: string, amount: number, unit: IngredientUnit): RecipeIngredient => ({
+  name,
+  amount,
+  unit,
+});
+
 const SAMPLE_RECIPES: Recipe[] = [
   // SALÉ
-  {
+    {
     id: 'omelette-fromage',
     name: 'Omelette au fromage',
     kind: 'savory',
-    ingredients: si('oeuf', 'fromage', 'huile', 'sel', 'poivre'),
-    servings: null,
+    ingredients: [
+      qi('oeuf', 3, 'unité'),
+      qi('fromage', 40, 'g'),
+      qi('huile', 15, 'ml'),
+      si('sel', 'poivre')[0],
+    ],
+    servings: 1,
     tags: ['rapide'],
   },
   {
     id: 'pates-tomate',
     name: 'Pâtes sauce tomate',
     kind: 'savory',
-    ingredients: si('pates', 'tomate', 'ail', 'huile', 'sel'),
-    servings: null,
+    ingredients: [
+      qi('pates', 200, 'g'),
+      qi('tomate', 200, 'g'),
+      qi('ail', 1, 'unité'),
+      qi('huile', 15, 'ml'),
+      si('sel')[0],
+    ],
+    servings: 2,
     tags: ['classique'],
   },
   {
     id: 'riz-legumes-saute',
     name: 'Riz aux légumes sautés',
     kind: 'savory',
-    ingredients: si('riz', 'legume', 'huile', 'ail', 'sauce soja'),
-    servings: null,
+    ingredients: [
+      qi('riz', 160, 'g'),
+      qi('legume', 300, 'g'),
+      qi('huile', 20, 'ml'),
+      qi('ail', 1, 'unité'),
+      qi('sauce soja', 20, 'ml'),
+    ],
+    servings: 2,
     tags: ['wok'],
   },
   {
     id: 'salade-thon-mais',
     name: 'Salade thon & maïs',
     kind: 'savory',
-    ingredients: si('salade', 'thon', 'mais', 'huile', 'vinaigre'),
-    servings: null,
+    ingredients: [
+      qi('salade', 100, 'g'),
+      qi('thon', 140, 'g'),
+      qi('mais', 150, 'g'),
+      qi('huile', 15, 'ml'),
+      qi('vinaigre', 10, 'ml'),
+    ],
+    servings: 2,
     tags: ['frais'],
   },
   {
     id: 'soupe-lentilles',
     name: 'Soupe de lentilles',
     kind: 'savory',
-    ingredients: si('lentille', 'carotte', 'oignon', 'bouillon', 'ail'),
-    servings: null,
+    ingredients: [
+      qi('lentille', 200, 'g'),
+      qi('carotte', 2, 'unité'),
+      qi('oignon', 1, 'unité'),
+      qi('bouillon', 500, 'ml'),
+      qi('ail', 1, 'unité'),
+    ],
+    servings: 3,
     tags: ['batch cooking'],
   },
 
@@ -173,42 +214,99 @@ const SAMPLE_RECIPES: Recipe[] = [
     id: 'pancakes',
     name: 'Pancakes',
     kind: 'sweet',
-    ingredients: si('farine', 'oeuf', 'lait', 'sucre', 'levure'),
-    servings: null,
+    ingredients: [
+      qi('farine', 150, 'g'),
+      qi('oeuf', 1, 'unité'),
+      qi('lait', 200, 'ml'),
+      qi('sucre', 25, 'g'),
+      qi('levure', 8, 'g'),
+    ],
+    servings: 2,
     tags: ['petit dej'],
   },
   {
     id: 'bol-yaourt-fruits',
     name: 'Bol yaourt, fruits & granola',
     kind: 'sweet',
-    ingredients: si('yaourt', 'fruit', 'granola', 'miel'),
-    servings: null,
+    ingredients: [
+      qi('yaourt', 150, 'g'),
+      qi('fruit', 120, 'g'),
+      qi('granola', 40, 'g'),
+      qi('miel', 15, 'g'),
+    ],
+    servings: 1,
     tags: ['frais'],
   },
   {
     id: 'mug-cake-choco',
     name: 'Mug cake chocolat',
     kind: 'sweet',
-    ingredients: si('farine', 'oeuf', 'lait', 'sucre', 'chocolat'),
-    servings: null,
+    ingredients: [
+      qi('farine', 30, 'g'),
+      qi('oeuf', 1, 'unité'),
+      qi('lait', 30, 'ml'),
+      qi('sucre', 20, 'g'),
+      qi('chocolat', 30, 'g'),
+    ],
+    servings: 1,
     tags: ['rapide'],
   },
   {
     id: 'compote-pomme-cannelle',
     name: 'Compote pomme cannelle',
     kind: 'sweet',
-    ingredients: si('pomme', 'sucre', 'cannelle', 'citron'),
-    servings: null,
+    ingredients: [
+      qi('pomme', 4, 'unité'),
+      qi('sucre', 20, 'g'),
+      si('cannelle')[0],
+      qi('citron', 15, 'ml'),
+    ],
+    servings: 4,
     tags: ['léger'],
   },
   {
     id: 'cookies-choco',
     name: 'Cookies chocolat',
     kind: 'sweet',
-    ingredients: si('farine', 'sucre', 'beurre', 'oeuf', 'chocolat'),
-    servings: null,
+    ingredients: [
+      qi('farine', 180, 'g'),
+      qi('sucre', 90, 'g'),
+      qi('beurre', 100, 'g'),
+      qi('oeuf', 1, 'unité'),
+      qi('chocolat', 100, 'g'),
+    ],
+    servings: 8,
     tags: ['gourmand'],
   },
+  { id: 'quiche-lorraine', name: 'Quiche lorraine', kind: 'savory', ingredients: [qi('pate brisee', 1, 'unité'), qi('oeuf', 3, 'unité'), qi('creme', 200, 'ml'), qi('lardon', 150, 'g'), qi('fromage', 80, 'g')], servings: 4, tags: ['four'] },
+  { id: 'gratin-dauphinois', name: 'Gratin dauphinois', kind: 'savory', ingredients: [qi('pomme de terre', 800, 'g'), qi('creme', 250, 'ml'), qi('lait', 250, 'ml'), qi('ail', 1, 'unité'), qi('fromage', 80, 'g')], servings: 4, tags: ['four'] },
+  { id: 'curry-poulet-riz', name: 'Curry de poulet au riz', kind: 'savory', ingredients: [qi('poulet', 300, 'g'), qi('riz', 200, 'g'), qi('curry', 10, 'g'), qi('lait coco', 200, 'ml'), qi('oignon', 1, 'unité')], servings: 3, tags: ['plat complet'] },
+  { id: 'chili-con-carne', name: 'Chili con carne', kind: 'savory', ingredients: [qi('boeuf', 300, 'g'), qi('haricot rouge', 250, 'g'), qi('tomate', 300, 'g'), qi('mais', 150, 'g'), qi('oignon', 1, 'unité')], servings: 4, tags: ['batch cooking'] },
+  { id: 'ratatouille', name: 'Ratatouille', kind: 'savory', ingredients: [qi('courgette', 2, 'unité'), qi('aubergine', 1, 'unité'), qi('tomate', 400, 'g'), qi('poivron', 2, 'unité'), qi('oignon', 1, 'unité')], servings: 4, tags: ['legumes'] },
+  { id: 'tartiflette', name: 'Tartiflette', kind: 'savory', ingredients: [qi('pomme de terre', 800, 'g'), qi('lardon', 200, 'g'), qi('oignon', 1, 'unité'), qi('fromage', 250, 'g'), qi('creme', 100, 'ml')], servings: 4, tags: ['hiver'] },
+  { id: 'croque-monsieur', name: 'Croque-monsieur', kind: 'savory', ingredients: [qi('pain', 4, 'unité'), qi('jambon', 2, 'unité'), qi('fromage', 80, 'g'), qi('beurre', 20, 'g')], servings: 2, tags: ['rapide'] },
+  { id: 'wrap-poulet', name: 'Wrap poulet crudites', kind: 'savory', ingredients: [qi('tortilla', 2, 'unité'), qi('poulet', 160, 'g'), qi('salade', 60, 'g'), qi('tomate', 1, 'unité'), qi('sauce', 30, 'g')], servings: 2, tags: ['rapide'] },
+  { id: 'taboule', name: 'Taboule', kind: 'savory', ingredients: [qi('semoule', 200, 'g'), qi('tomate', 2, 'unité'), qi('concombre', 1, 'unité'), qi('citron', 30, 'ml'), qi('huile', 30, 'ml')], servings: 4, tags: ['frais'] },
+  { id: 'risotto-champignon', name: 'Risotto aux champignons', kind: 'savory', ingredients: [qi('riz', 220, 'g'), qi('champignon', 250, 'g'), qi('oignon', 1, 'unité'), qi('bouillon', 700, 'ml'), qi('fromage', 60, 'g')], servings: 3, tags: ['cremeux'] },
+  { id: 'lasagnes', name: 'Lasagnes', kind: 'savory', ingredients: [qi('pates', 250, 'g'), qi('boeuf', 400, 'g'), qi('tomate', 500, 'g'), qi('fromage', 120, 'g'), qi('lait', 500, 'ml')], servings: 5, tags: ['four'] },
+  { id: 'hache-parmentier', name: 'Hachis parmentier', kind: 'savory', ingredients: [qi('pomme de terre', 800, 'g'), qi('boeuf', 400, 'g'), qi('lait', 150, 'ml'), qi('beurre', 40, 'g'), qi('fromage', 80, 'g')], servings: 4, tags: ['four'] },
+  { id: 'salade-cesar', name: 'Salade Cesar', kind: 'savory', ingredients: [qi('salade', 120, 'g'), qi('poulet', 200, 'g'), qi('pain', 2, 'unité'), qi('fromage', 50, 'g'), qi('sauce', 40, 'g')], servings: 2, tags: ['frais'] },
+  { id: 'poelee-riz-oeuf', name: 'Poelee riz oeuf', kind: 'savory', ingredients: [qi('riz', 180, 'g'), qi('oeuf', 2, 'unité'), qi('legume', 250, 'g'), qi('sauce soja', 20, 'ml'), qi('huile', 15, 'ml')], servings: 2, tags: ['anti gaspi'] },
+  { id: 'tarte-thon-tomate', name: 'Tarte thon tomate', kind: 'savory', ingredients: [qi('pate brisee', 1, 'unité'), qi('thon', 160, 'g'), qi('tomate', 300, 'g'), qi('moutarde', 20, 'g'), qi('fromage', 80, 'g')], servings: 4, tags: ['four'] },
+  { id: 'fajitas', name: 'Fajitas', kind: 'savory', ingredients: [qi('tortilla', 4, 'unité'), qi('poulet', 300, 'g'), qi('poivron', 2, 'unité'), qi('oignon', 1, 'unité'), qi('epice', 10, 'g')], servings: 4, tags: ['convivial'] },
+  { id: 'dahl-lentilles', name: 'Dahl de lentilles', kind: 'savory', ingredients: [qi('lentille', 250, 'g'), qi('lait coco', 250, 'ml'), qi('curry', 10, 'g'), qi('tomate', 300, 'g'), qi('riz', 180, 'g')], servings: 4, tags: ['vegetarien'] },
+  { id: 'pizza-maison', name: 'Pizza maison', kind: 'savory', ingredients: [qi('pate pizza', 1, 'unité'), qi('tomate', 200, 'g'), qi('fromage', 150, 'g'), qi('jambon', 2, 'unité'), qi('champignon', 120, 'g')], servings: 3, tags: ['four'] },
+
+    { id: 'crepes', name: 'Crepes', kind: 'sweet', ingredients: [qi('farine', 250, 'g'), qi('oeuf', 3, 'unité'), qi('lait', 500, 'ml'), qi('sucre', 30, 'g'), qi('beurre', 30, 'g')], servings: 6, tags: ['classique'] },
+  { id: 'gateau-yaourt', name: 'Gateau au yaourt', kind: 'sweet', ingredients: [qi('yaourt', 1, 'unité'), qi('farine', 180, 'g'), qi('sucre', 120, 'g'), qi('oeuf', 3, 'unité'), qi('huile', 80, 'ml')], servings: 8, tags: ['four'] },
+  { id: 'brownie', name: 'Brownie chocolat', kind: 'sweet', ingredients: [qi('chocolat', 200, 'g'), qi('beurre', 120, 'g'), qi('sucre', 120, 'g'), qi('oeuf', 3, 'unité'), qi('farine', 80, 'g')], servings: 8, tags: ['gourmand'] },
+  { id: 'tarte-pomme', name: 'Tarte aux pommes', kind: 'sweet', ingredients: [qi('pate brisee', 1, 'unité'), qi('pomme', 4, 'unité'), qi('sucre', 50, 'g'), qi('beurre', 30, 'g'), qi('cannelle', 5, 'g')], servings: 6, tags: ['four'] },
+  { id: 'riz-au-lait', name: 'Riz au lait', kind: 'sweet', ingredients: [qi('riz', 150, 'g'), qi('lait', 800, 'ml'), qi('sucre', 80, 'g'), qi('vanille', 5, 'g')], servings: 4, tags: ['dessert'] },
+  { id: 'pain-perdu', name: 'Pain perdu', kind: 'sweet', ingredients: [qi('pain', 4, 'unité'), qi('lait', 250, 'ml'), qi('oeuf', 2, 'unité'), qi('sucre', 30, 'g'), qi('beurre', 30, 'g')], servings: 2, tags: ['anti gaspi'] },
+  { id: 'mousse-chocolat', name: 'Mousse au chocolat', kind: 'sweet', ingredients: [qi('chocolat', 200, 'g'), qi('oeuf', 6, 'unité'), qi('sucre', 30, 'g')], servings: 6, tags: ['dessert'] },
+  { id: 'crumble-pomme', name: 'Crumble aux pommes', kind: 'sweet', ingredients: [qi('pomme', 5, 'unité'), qi('farine', 120, 'g'), qi('beurre', 90, 'g'), qi('sucre', 90, 'g'), qi('cannelle', 5, 'g')], servings: 6, tags: ['four'] },
+  { id: 'smoothie-banane', name: 'Smoothie banane', kind: 'sweet', ingredients: [qi('banane', 2, 'unité'), qi('lait', 250, 'ml'), qi('yaourt', 125, 'g'), qi('miel', 15, 'g')], servings: 2, tags: ['rapide'] },
+  { id: 'porridge', name: 'Porridge', kind: 'sweet', ingredients: [qi('flocon avoine', 60, 'g'), qi('lait', 250, 'ml'), qi('banane', 1, 'unité'), qi('miel', 15, 'g')], servings: 1, tags: ['petit dej'] },
 ];
 
 function normalizeText(s: string): string {
@@ -359,13 +457,16 @@ function findProductForIngredient(products: Product[], name: string): Product | 
   );
 }
 
-function kcalForRecipe(recipe: Recipe, products: Product[]): { kcal: number; missingCount: number; approx: boolean } {
+function kcalForIngredients(
+  ingredients: RecipeIngredient[],
+  products: Product[],
+): { kcal: number; missingCount: number; approx: boolean } {
   let total = 0;
   let missing = 0;
   let approx = false;
 
-  for (const ing of recipe.ingredients) {
-    if (!ing.amount || !ing.unit) {
+  for (const ing of ingredients) {
+    if (ing.amount == null || !ing.unit) {
       missing += 1;
       continue;
     }
@@ -405,25 +506,57 @@ function kcalForRecipe(recipe: Recipe, products: Product[]): { kcal: number; mis
   return { kcal: Math.round(total), missingCount: missing, approx };
 }
 
+function kcalForRecipe(recipe: Recipe, products: Product[]): { kcal: number; missingCount: number; approx: boolean } {
+  return kcalForIngredients(recipe.ingredients, products);
+}
+
+function mealCaloriesInfo(
+  meal: WeekMeal,
+  recipes: Recipe[],
+  products: Product[],
+): { kcal: number | null; approx: boolean } {
+  if (meal.kcal_override != null) {
+    return { kcal: Math.round(meal.kcal_override), approx: false };
+  }
+
+  if (meal.recipe_id) {
+    const r = recipes.find((x) => x.id === meal.recipe_id);
+
+    if (r) {
+      const recipeCalories = kcalForRecipe(r, products);
+
+      if (recipeCalories.kcal <= 0 && recipeCalories.missingCount > 0) {
+        return { kcal: null, approx: recipeCalories.approx };
+      }
+
+      const recipeServ = r.servings ?? 1;
+      const mealServ = meal.servings ?? 1;
+
+      return {
+        kcal: Math.round((recipeCalories.kcal / recipeServ) * mealServ),
+        approx: recipeCalories.approx,
+      };
+    }
+  }
+
+  const mealIngredients = meal.ingredients?.map(parseSingleMealIngredient) ?? [];
+  if (mealIngredients.length === 0) return { kcal: null, approx: false };
+
+  const ingredientCalories = kcalForIngredients(mealIngredients, products);
+
+  if (ingredientCalories.kcal <= 0 && ingredientCalories.missingCount > 0) {
+    return { kcal: null, approx: ingredientCalories.approx };
+  }
+
+  return {
+    kcal: ingredientCalories.kcal,
+    approx: ingredientCalories.approx,
+  };
+}
+
 function mealCalories(meal: WeekMeal, recipes: Recipe[], products: Product[]): number | null {
-  if (meal.kcal_override != null) return Math.round(meal.kcal_override);
-
-  if (!meal.recipe_id) return null;
-  const r = recipes.find((x) => x.id === meal.recipe_id);
-  if (!r) return null;
-
-  const recipeCalories = kcalForRecipe(r, products);
-
-  if (recipeCalories.kcal <= 0 && recipeCalories.missingCount > 0) {
-    return null;
-  }
-
-  const recipeServ = r.servings ?? 1;
-  const mealServ = meal.servings ?? 1;
-
-  // kcal par portion * nb portions
-  return Math.round((recipeCalories.kcal / recipeServ) * mealServ);
-  }
+  return mealCaloriesInfo(meal, recipes, products).kcal;
+}
 
 function toDateKey(d: Date): string {
   const yyyy = d.getFullYear();
@@ -480,6 +613,25 @@ function formatRecipeIngredient(ingredient: RecipeIngredient): string {
   return ingredient.name;
 }
 
+function scaleRecipeIngredients(
+  ingredients: RecipeIngredient[],
+  recipeServings: number | null | undefined,
+  mealServings: number | null | undefined,
+): RecipeIngredient[] {
+  const baseServings = recipeServings && recipeServings > 0 ? recipeServings : 1;
+  const targetServings = mealServings && mealServings > 0 ? mealServings : baseServings;
+  const factor = targetServings / baseServings;
+
+  return ingredients.map((ingredient) => {
+    if (ingredient.amount == null || !ingredient.unit) return ingredient;
+
+    return {
+      ...ingredient,
+      amount: roundQty(ingredient.amount * factor, ingredient.unit),
+    };
+  });
+}
+
 function parseSingleMealIngredient(raw: string): RecipeIngredient {
   return parseRecipeIngredients(raw)[0] ?? { name: raw.trim(), amount: null, unit: null };
 }
@@ -511,10 +663,36 @@ const navItems: { key: Tab; label: string; icon: string }[] = [
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const addProductSectionRef = useRef<HTMLElement | null>(null);
+  const [scrollToAddForm, setScrollToAddForm] = useState(false);
   const [stocks, setStocks] = useState<StockItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shoppingSubTab, setShoppingSubTab] = useState<'main' | 'others'>('main');
+  const [shoppingSearch, setShoppingSearch] = useState('');
+  const [shoppingFilter, setShoppingFilter] = useState<ShoppingFilter>('all');
+  const [checkedShoppingIds, setCheckedShoppingIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(SHOPPING_CHECKED_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+
+      return Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === 'string')
+        : [];
+    } catch (e) {
+      console.error(e);
+      return [];
+    }
+  });
+  const [hideCheckedShopping, setHideCheckedShopping] = useState(false);
+  const [stockSearch, setStockSearch] = useState('');
+  const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+  const [stockPlaceFilter, setStockPlaceFilter] = useState('');
+  const [stockSort, setStockSort] = useState<StockSort>('expiration');
+  const [stockSortDirection, setStockSortDirection] = useState<StockSortDirection>('asc');
   const [recipesSubTab, setRecipesSubTab] = useState<'feasible' | 'all'>('feasible');
+  const [recipeSearch, setRecipeSearch] = useState('');
+  const [recipeFilter, setRecipeFilter] = useState<RecipeFilter>('all');
+  
 
   const [loading, setLoading] = useState(true);
   const [recipesLoading, setRecipesLoading] = useState(false);
@@ -536,6 +714,8 @@ function App() {
   const [expirationType, setExpirationType] = useState<ExpirationType>('dlc');
   const [isOpen, setIsOpen] = useState(false);
   const [barcode, setBarcode] = useState('');
+  const [addExistingProductId, setAddExistingProductId] = useState<string | null>(null);
+  const [showBackToShoppingAfterAdd, setShowBackToShoppingAfterAdd] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [autoFillLoading, setAutoFillLoading] = useState(false);
   const [subCategory, setSubCategory] = useState<SubCategory | ''>(''); // ✅ à la place d'utiliser editSubCategory
@@ -548,7 +728,14 @@ function App() {
   const [dbRecipes, setDbRecipes] = useState<Recipe[]>([]);
   const [newRecipeName, setNewRecipeName] = useState('');
   const [newRecipeKind, setNewRecipeKind] = useState<RecipeKind>('savory');
+  const [newRecipeServings, setNewRecipeServings] = useState('1');
   const [newRecipeIngredients, setNewRecipeIngredients] = useState('');
+  const [editRecipeOpen, setEditRecipeOpen] = useState(false);
+  const [editRecipeTarget, setEditRecipeTarget] = useState<Recipe | null>(null);
+  const [editRecipeName, setEditRecipeName] = useState('');
+  const [editRecipeKind, setEditRecipeKind] = useState<RecipeKind>('savory');
+  const [editRecipeServings, setEditRecipeServings] = useState('1');
+  const [editRecipeIngredients, setEditRecipeIngredients] = useState('');
 
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<StockItem | null>(null);
@@ -583,6 +770,7 @@ function App() {
   const [planSlot, setPlanSlot] = useState<MealSlot>('lunch');
   const [planRecipeValue, setPlanRecipeValue] = useState<string>(''); // db:<id> | sample:<id> | custom
   const [planCustomName, setPlanCustomName] = useState('');
+  const [planCustomIngredients, setPlanCustomIngredients] = useState('');
   const [planServings, setPlanServings] = useState<string>('1');
   const [planNotes, setPlanNotes] = useState('');
 
@@ -612,11 +800,28 @@ function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(SHOPPING_CHECKED_STORAGE_KEY, JSON.stringify(checkedShoppingIds));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [checkedShoppingIds]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
     } catch (e) {
       console.error(e);
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (activeTab !== 'dashboard' || !scrollToAddForm) return;
+
+    window.requestAnimationFrame(() => {
+      addProductSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setScrollToAddForm(false);
+    });
+  }, [activeTab, scrollToAddForm]);
 
   useEffect(() => {
     setPlace(settings.defaultPlace);
@@ -1172,10 +1377,13 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
 
     setError(null);
 
+    const servingsNum = Number(newRecipeServings);
+    const servings = Number.isFinite(servingsNum) && servingsNum > 0 ? servingsNum : null;
+
     // 1) create recipe
     const { data: recipeRow, error: recipeErr } = await supabase
       .from('recipes')
-      .insert({ name: recipeName, kind: newRecipeKind })
+      .insert({ name: recipeName, kind: newRecipeKind, servings })
       .select('id, name, kind, servings')
       .single();
 
@@ -1211,7 +1419,99 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
       servings: recipeRow.servings ?? null,
     }, ...prev]);
     setNewRecipeName('');
+    setNewRecipeServings('1');
     setNewRecipeIngredients('');
+  };
+
+  const openEditRecipe = (recipe: Recipe) => {
+    setEditRecipeTarget(recipe);
+    setEditRecipeName(recipe.name);
+    setEditRecipeKind(recipe.kind);
+    setEditRecipeServings(String(recipe.servings ?? 1));
+    setEditRecipeIngredients(recipe.ingredients.map(formatRecipeIngredient).join(', '));
+    setEditRecipeOpen(true);
+  };
+
+  const saveEditRecipe = async () => {
+    if (!editRecipeTarget) return;
+
+    const recipeName = editRecipeName.trim();
+    const ingredients = parseRecipeIngredients(editRecipeIngredients);
+    const servingsNum = Number(editRecipeServings);
+    const servings = Number.isFinite(servingsNum) && servingsNum > 0 ? servingsNum : null;
+
+    if (!recipeName) {
+      setError('Le nom de la recette est obligatoire.');
+      return;
+    }
+
+    if (ingredients.length === 0) {
+      setError('Ajoute au moins un ingrédient.');
+      return;
+    }
+
+    setError(null);
+
+    const { error: recipeError } = await supabase
+      .from('recipes')
+      .update({
+        name: recipeName,
+        kind: editRecipeKind,
+        servings,
+      })
+      .eq('id', editRecipeTarget.id);
+
+    if (recipeError) {
+      console.error(recipeError);
+      setError('Erreur lors de la mise à jour de la recette.');
+      return;
+    }
+
+    const { error: deleteIngredientsError } = await supabase
+      .from('recipe_ingredients')
+      .delete()
+      .eq('recipe_id', editRecipeTarget.id);
+
+    if (deleteIngredientsError) {
+      console.error(deleteIngredientsError);
+      setError('Recette mise à jour, mais erreur sur les anciens ingrédients.');
+      return;
+    }
+
+    const toInsert = ingredients.map((ing, i) => ({
+      recipe_id: editRecipeTarget.id,
+      ingredient: ing.name,
+      position: i,
+      amount: ing.amount,
+      unit: ing.unit,
+    }));
+
+    const { error: insertIngredientsError } = await supabase
+      .from('recipe_ingredients')
+      .insert(toInsert);
+
+    if (insertIngredientsError) {
+      console.error(insertIngredientsError);
+      setError('Recette mise à jour, mais erreur sur les nouveaux ingrédients.');
+      return;
+    }
+
+    setDbRecipes((prev) =>
+      prev.map((recipe) =>
+        recipe.id === editRecipeTarget.id
+          ? {
+              ...recipe,
+              name: recipeName,
+              kind: editRecipeKind,
+              servings,
+              ingredients,
+            }
+          : recipe,
+      ),
+    );
+
+    setEditRecipeOpen(false);
+    setEditRecipeTarget(null);
   };
 
   const deleteRecipeInDb = async (recipeId: string) => {
@@ -1302,6 +1602,27 @@ const unhideFromShopping = async (productId: string) => {
   );
 };
 
+const resetAddForm = () => {
+  setName('');
+  setGenericName('');
+  setBrand('');
+  setCategory('');
+  setEditSubCategory('');
+  setQuantity('1');
+  setUnit('unité');
+  setExpiration('');
+  setExpirationType('dlc');
+  setIsOpen(false);
+  setBarcode('');
+  setSubCategory('');
+  setKcal100g('');
+  setGramsPerUnit('');
+  setDensityGml('');
+  setAddExistingProductId(null);
+  setShowBackToShoppingAfterAdd(false);
+};
+
+
   // ---------- Add stock ----------
   const handleAdd = async (e: FormEvent) => {
   e.preventDefault();
@@ -1313,11 +1634,22 @@ const unhideFromShopping = async (productId: string) => {
   }
 
   try {
-    // 1) find/create product by barcode
-    let productRow: any | null = null;
-    const trimmedBarcode = barcode.trim();
+    // 1) find/create product by selected product or barcode
+      let productRow: any | null = null;
+      const trimmedBarcode = barcode.trim();
 
-    if (trimmedBarcode) {
+      if (addExistingProductId) {
+        const { data: existingProductById, error: existingProductByIdError } = await supabase
+          .from('products')
+          .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
+          .eq('id', addExistingProductId)
+          .maybeSingle();
+
+        if (existingProductByIdError) throw existingProductByIdError;
+        if (existingProductById) productRow = existingProductById;
+      }
+
+      if (!productRow && trimmedBarcode) {
       const { data: existingProducts, error: existingProductError } = await supabase
         .from('products')
         .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`)
@@ -1497,22 +1829,23 @@ const unhideFromShopping = async (productId: string) => {
       return copy;
     });
 
-    // reset form
-    setName('');
-    setGenericName('');
-    setBrand('');
-    setCategory('');
-    setEditSubCategory('');
-    setQuantity('1');
-    setUnit('unité');
-    setExpiration('');
-    setExpirationType('dlc');
-    setIsOpen(false);
-    setBarcode('');
-    setSubCategory('');
-    setKcal100g('');
-    setGramsPerUnit('');
-    setDensityGml('');
+
+    const addedFromShoppingProductId = addExistingProductId ? normalizedProduct.id : null;
+
+    resetAddForm();
+
+    if (addedFromShoppingProductId) {
+      setCheckedShoppingIds((prev) => prev.filter((id) => id !== addedFromShoppingProductId));
+    }
+
+    setInfo(
+      addedFromShoppingProductId
+        ? '✅ Produit ajouté au stock. La liste de courses se mettra à jour selon la quantité restante.'
+        : '✅ Produit ajouté au stock.',
+    );
+
+    setShowBackToShoppingAfterAdd(!!addedFromShoppingProductId);
+    setError(null);
   } catch (err) {
     console.error(err);
     setError("Erreur lors de l'ajout du produit");
@@ -1671,8 +2004,22 @@ const ddmExceededList = inStock
   return data;
 };
 
+const getMealIngredientsForStock = (meal: WeekMeal): string[] => {
+  if (meal.recipe_id) {
+    const recipe = dbRecipes.find((r) => r.id === meal.recipe_id);
+
+    if (recipe && recipe.ingredients.length > 0) {
+      return scaleRecipeIngredients(recipe.ingredients, recipe.servings, meal.servings).map(formatRecipeIngredient);
+    }
+  }
+
+  return meal.ingredients ?? [];
+};
+
 async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: string[]; missing: string[] }> {
-  if (!meal.ingredients || meal.ingredients.length === 0) {
+  const mealIngredients = getMealIngredientsForStock(meal);
+
+  if (mealIngredients.length === 0) {
     return { decremented: [], missing: [] };
   }
 
@@ -1680,7 +2027,7 @@ async function decrementStockForMeal(meal: WeekMeal): Promise<{ decremented: str
   const missingIngredients: string[] = [];
   const usedStockIds = new Set<string>();
 
-  for (const ingredient of meal.ingredients) {
+  for (const ingredient of mealIngredients) {
     const parsedIngredient = parseSingleMealIngredient(ingredient);
     const key = normalizeText(parsedIngredient.name);
     if (!key) continue;
@@ -1840,10 +2187,26 @@ const changeUnit = async (item: StockItem, newUnit: string) => {
 };
 
 const renderHistoryTab = () => {
-  const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
-    label: cat,
-    items: outOfStock.filter((s) => s.product?.category === cat),
-  }));
+  const categorizedHistoryIds = new Set<string>();
+
+  const groupedByCategory: { label: string; items: StockItem[] }[] = MAIN_CATEGORIES.map((cat) => {
+    const items = outOfStock.filter((s) => s.product?.category === cat);
+    items.forEach((item) => categorizedHistoryIds.add(item.id));
+
+    return {
+      label: cat,
+      items,
+    };
+  });
+
+  const uncategorizedItems = outOfStock.filter((item) => !categorizedHistoryIds.has(item.id));
+
+  if (uncategorizedItems.length > 0) {
+    groupedByCategory.push({
+      label: 'Sans catégorie',
+      items: uncategorizedItems,
+    });
+  }
 
   return (
     <>
@@ -1936,6 +2299,7 @@ const openPlanFromRecipe = (recipe: Recipe) => {
   setPlanSlot('lunch');
   setPlanRecipeValue(getRecipePlanValue(recipe));
   setPlanCustomName('');
+  setPlanCustomIngredients('');
   setPlanServings('1');
   setPlanNotes('');
   setPlanKcalOverride('');
@@ -1964,11 +2328,13 @@ const renderWeekMenuTab = () => {
       // pré-remplir
       setPlanRecipeValue(existing.recipe_id ? `db:${existing.recipe_id}` : 'custom');
       setPlanCustomName(existing.recipe_id ? '' : existing.recipe_name);
+      setPlanCustomIngredients(existing.ingredients?.join(', ') ?? '');
       setPlanServings(String(existing.servings ?? 1));
       setPlanNotes(existing.notes ?? '');
     } else {
       setPlanRecipeValue('');
       setPlanCustomName('');
+      setPlanCustomIngredients('');
       setPlanServings('1');
       setPlanNotes('');
     }
@@ -1983,6 +2349,8 @@ const renderWeekMenuTab = () => {
     let recipe_kind: RecipeKind | null = null;
     let ingredients: string[] | null = null;
 
+    const servingsNum = Number(planServings);
+    const servings = Number.isFinite(servingsNum) && servingsNum > 0 ? servingsNum : null;
     const v = planRecipeValue;
 
     if (!v || v === 'custom') {
@@ -1991,24 +2359,31 @@ const renderWeekMenuTab = () => {
         setError("Donne un nom au repas (ou choisis une recette).");
         return;
       }
+
+      const customIngredients = parseRecipeIngredients(planCustomIngredients);
+      ingredients = customIngredients.length > 0
+        ? customIngredients.map(formatRecipeIngredient)
+        : null;
     } else if (v.startsWith('db:')) {
       recipe_id = v.slice(3);
       const r = allRecipes.find((x) => x.id === recipe_id);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ? r.ingredients.map(formatRecipeIngredient) : null;
+      ingredients = r?.ingredients
+        ? scaleRecipeIngredients(r.ingredients, r.servings, servings).map(formatRecipeIngredient)
+        : null;
     } else if (v.startsWith('sample:')) {
       const rid = v.slice(7);
       const r = allRecipes.find((x) => x.id === rid);
       recipe_name = r?.name ?? 'Recette';
       recipe_kind = r?.kind ?? null;
-      ingredients = r?.ingredients ? r.ingredients.map(formatRecipeIngredient) : null;
+      ingredients = r?.ingredients
+        ? scaleRecipeIngredients(r.ingredients, r.servings, servings).map(formatRecipeIngredient)
+        : null;
       // pas de recipe_id en DB pour les samples => on stocke un snapshot
       recipe_id = null;
     }
 
-    const servingsNum = Number(planServings);
-    const servings = Number.isFinite(servingsNum) ? servingsNum : null;
     const kcalOverrideNum = Number(planKcalOverride);
     const kcal_override = Number.isFinite(kcalOverrideNum) ? kcalOverrideNum : null;
 
@@ -2038,8 +2413,8 @@ const renderWeekMenuTab = () => {
       .map((s) => normalize(getProductMatchName(s.product!)));
 
     const hasIngredient = (ingredient: string) => {
-      const key = normalize(ingredient);
-      return stockNames.some((n) => n.includes(key));
+      const key = normalize(getShoppingKeywordFromIngredient(ingredient));
+      return stockNames.some((n) => n.includes(key) || key.includes(n));
     };
     
     // collect missing
@@ -2135,10 +2510,12 @@ const renderWeekMenuTab = () => {
                         <div className="meal-mini">
                           <div className="meal-mini-title">{cell.recipe_name}</div>
                           {(() => {
-                            const kcal = mealCalories(cell, dbRecipes, products);
+                            const calories = mealCaloriesInfo(cell, dbRecipes, products);
                             return (
                               <div className="meal-mini-meta">
-                                {kcal != null ? `🔥 ${kcal} kcal` : 'Calories à compléter'}
+                                {calories.kcal != null
+                                  ? `🔥 ${calories.approx ? '≈ ' : ''}${calories.kcal} kcal`
+                                  : 'Calories à compléter'}
                               </div>
                             );
                           })()}
@@ -2248,15 +2625,28 @@ const renderWeekMenuTab = () => {
                 </select>
               </div>
               {(planRecipeValue === 'custom' || planRecipeValue === '') && (
-                <div className="field-group full">
-                  <label className="field-label">Nom du repas</label>
-                  <input
-                    className="field-input"
-                    value={planCustomName}
-                    onChange={(e) => setPlanCustomName(e.target.value)}
-                    placeholder="Ex : Restes / Sandwich / Pizza..."
-                  />
-                </div>
+                <>
+                  <div className="field-group full">
+                    <label className="field-label">Nom du repas</label>
+                    <input
+                      className="field-input"
+                      value={planCustomName}
+                      onChange={(e) => setPlanCustomName(e.target.value)}
+                      placeholder="Ex : Restes / Sandwich / Pizza..."
+                    />
+                  </div>
+
+                  <div className="field-group full">
+                    <label className="field-label">Ingrédients du repas libre</label>
+                    <textarea
+                      className="field-input"
+                      value={planCustomIngredients}
+                      onChange={(e) => setPlanCustomIngredients(e.target.value)}
+                      placeholder="Ex : pain 2 unité, jambon 2 unité, fromage 50 g"
+                      rows={3}
+                    />
+                  </div>
+                </>
               )}
 
               <div className="field-group">
@@ -2314,10 +2704,111 @@ const hideFromShopping = async (productId: string) => {
 
   // ---------- Tabs ----------
 const renderStockTab = () => {
-  const groupedByCategory = MAIN_CATEGORIES.map((cat) => ({
-    label: cat,
-    items: inStock.filter((s) => s.product?.category === cat),
-  }));
+  const stockSearchKey = normalizeText(stockSearch);
+
+  const searchFilteredInStock = stockSearchKey
+    ? inStock.filter((item) => {
+        const searchableText = [
+          item.product?.name,
+          item.product?.generic_name,
+          item.product?.brand,
+          item.product?.category,
+          item.product?.sub_category,
+          item.product?.barcode,
+          item.place,
+          item.unit,
+        ]
+          .filter(Boolean)
+          .map(String)
+          .map(normalizeText)
+          .join(' ');
+
+        return searchableText.includes(stockSearchKey);
+      })
+    : inStock;
+
+  const stockPlaces = Array.from(
+    new Set(
+      inStock
+        .map((item) => item.place?.trim())
+        .filter((place): place is string => !!place),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const filteredInStock = searchFilteredInStock.filter((item) => {
+    const status = getExpirationStatus(item.expiration_date, settings.soonDays);
+    if (stockPlaceFilter && item.place !== stockPlaceFilter) return false;
+    if (stockFilter === 'soon') return status === 'soon';
+    if (stockFilter === 'expired') return status === 'expired';
+    if (stockFilter === 'expired-dlc') return status === 'expired' && item.expiration_type === 'dlc';
+    if (stockFilter === 'expired-ddm') return status === 'expired' && item.expiration_type === 'ddm';
+    if (stockFilter === 'open') return item.is_open;
+    if (stockFilter === 'low') return (item.quantity ?? 0) <= stepForUnit(item.unit);
+
+    return true;
+  });
+
+  const sortedInStock = [...filteredInStock].sort((a, b) => {
+    let result = 0;
+
+    if (stockSort === 'name') {
+      result = (a.product?.name ?? '').localeCompare(b.product?.name ?? '');
+    } else if (stockSort === 'quantity') {
+      result = (a.quantity ?? 0) - (b.quantity ?? 0);
+    } else if (stockSort === 'place') {
+      result = (a.place ?? '').localeCompare(b.place ?? '');
+    } else {
+      result = (a.expiration_date ?? '9999-12-31').localeCompare(b.expiration_date ?? '9999-12-31');
+    }
+
+    return stockSortDirection === 'asc' ? result : -result;
+  });
+
+  const stockFilterOptions: { value: StockFilter; label: string }[] = [
+    { value: 'all', label: 'Tous' },
+    { value: 'soon', label: 'Bientôt périmés' },
+    { value: 'expired-dlc', label: 'DLC périmées' },
+    { value: 'expired-ddm', label: 'DDM dépassées' },
+    { value: 'expired', label: 'Tous périmés' },
+    { value: 'open', label: 'Ouverts' },
+    { value: 'low', label: 'Stock faible' },
+  ];
+
+  const hasActiveStockControls =
+    stockSearch.trim() ||
+    stockFilter !== 'all' ||
+    stockPlaceFilter ||
+    stockSort !== 'expiration' ||
+    stockSortDirection !== 'asc';
+
+  const resetStockControls = () => {
+    setStockSearch('');
+    setStockFilter('all');
+    setStockPlaceFilter('');
+    setStockSort('expiration');
+    setStockSortDirection('asc');
+  };
+
+  const categorizedStockIds = new Set<string>();
+
+  const groupedByCategory: { label: string; items: StockItem[] }[] = MAIN_CATEGORIES.map((cat) => {
+    const items = sortedInStock.filter((s) => s.product?.category === cat);
+    items.forEach((item) => categorizedStockIds.add(item.id));
+
+    return {
+      label: cat,
+      items,
+    };
+  });
+
+  const uncategorizedItems = sortedInStock.filter((item) => !categorizedStockIds.has(item.id));
+
+  if (uncategorizedItems.length > 0) {
+    groupedByCategory.push({
+      label: 'Sans catégorie',
+      items: uncategorizedItems,
+    });
+  }
 
   const renderRowsTable = (rows: StockItem[]) => (
     <div className="table-wrapper" style={{ maxHeight: 360 }}>
@@ -2342,6 +2833,12 @@ const renderStockTab = () => {
             const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
             const status = getExpirationStatus(expDate, settings.soonDays);
             const labelStatus = getExpirationLabel(status, item.expiration_type);
+            const expirationTypeLabel =
+              item.expiration_type === 'dlc'
+                ? 'DLC'
+                : item.expiration_type === 'ddm'
+                  ? 'DDM'
+                  : 'Date inconnue';
             const kcalInfo = kcalForStock(item);
 
             return (
@@ -2419,7 +2916,12 @@ const renderStockTab = () => {
                   </select>
                 </td>
 
-                <td>{exp}</td>
+                <td>
+                  <div className="product-cell">
+                    <span>{exp}</span>
+                    <span className="product-brand">{expirationTypeLabel}</span>
+                  </div>
+                </td>
 
                 <td>
                   <button
@@ -2458,7 +2960,7 @@ const renderStockTab = () => {
     </div>
   );
 
-  const renderCategoryContent = (label: MainCategory, items: StockItem[]) => {
+  const renderCategoryContent = (label: string, items: StockItem[]) => {
     if (items.length === 0) {
       return (
         <p className="muted" style={{ marginTop: '0.5rem' }}>
@@ -2467,7 +2969,9 @@ const renderStockTab = () => {
       );
     }
 
-    const subcats = getSubcatsFor(label);
+    const subcats = MAIN_CATEGORIES.includes(label as MainCategory)
+      ? getSubcatsFor(label as MainCategory)
+      : [];
 
     // pas de sous-catégories => table directe
     if (subcats.length === 0) return renderRowsTable(items);
@@ -2515,17 +3019,123 @@ const renderStockTab = () => {
         </div>
       </div>
 
+      <section className="card">
+        <div className="field-group full">
+          <label className="field-label">Rechercher dans le stock</label>
+          <div className="field-row">
+            <input
+              className="field-input"
+              value={stockSearch}
+              onChange={(e) => setStockSearch(e.target.value)}
+              placeholder="Nom, marque, lieu, catégorie..."
+            />
+            {stockSearch && (
+              <button type="button" className="btn-tertiary" onClick={() => setStockSearch('')}>
+                Effacer
+              </button>
+            )}
+          </div>
+
+          <div className="field-group" style={{ marginTop: '0.6rem' }}>
+            <label className="field-label">Trier par</label>
+            <select
+              className="field-input"
+              value={stockSort}
+              onChange={(e) => setStockSort(e.target.value as StockSort)}
+            >
+              <option value="expiration">Date de péremption</option>
+              <option value="name">Nom</option>
+              <option value="quantity">Quantité</option>
+              <option value="place">Lieu</option>
+            </select>
+          </div>
+
+          <div className="field-group" style={{ marginTop: '0.6rem' }}>
+            <label className="field-label">Sens du tri</label>
+            <select
+              className="field-input"
+              value={stockSortDirection}
+              onChange={(e) => setStockSortDirection(e.target.value as StockSortDirection)}
+            >
+              <option value="asc">
+                {stockSort === 'expiration'
+                  ? 'Plus urgent d’abord'
+                  : stockSort === 'quantity'
+                    ? 'Plus faible d’abord'
+                    : 'A-Z'}
+              </option>
+              <option value="desc">
+                {stockSort === 'expiration'
+                  ? 'Plus loin d’abord'
+                  : stockSort === 'quantity'
+                    ? 'Plus élevé d’abord'
+                    : 'Z-A'}
+              </option>
+            </select>
+          </div>
+
+          <div className="subtabs" style={{ marginTop: '0.6rem' }}>
+            {stockFilterOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={'subtab-btn' + (stockFilter === option.value ? ' subtab-btn--active' : '')}
+                onClick={() => setStockFilter(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {stockPlaces.length > 0 && (
+            <div className="field-group" style={{ marginTop: '0.6rem' }}>
+              <label className="field-label">Filtrer par lieu</label>
+              <select
+                className="field-input"
+                value={stockPlaceFilter}
+                onChange={(e) => setStockPlaceFilter(e.target.value)}
+              >
+                <option value="">Tous les lieux</option>
+                {stockPlaces.map((placeName) => (
+                  <option key={placeName} value={placeName}>
+                    {placeName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {hasActiveStockControls && (
+            <button
+              type="button"
+              className="btn-tertiary"
+              style={{ marginTop: '0.6rem' }}
+              onClick={resetStockControls}
+            >
+              Réinitialiser les filtres
+            </button>
+          )}
+
+          <p className="muted" style={{ marginTop: '0.4rem' }}>
+            {sortedInStock.length} résultat(s) sur {inStock.length} produit(s) en stock.
+          </p>
+        </div>
+      </section>
+
       {loading ? (
         <section className="card">
           <p>Chargement...</p>
         </section>
       ) : inStock.length === 0 ? (
         <section className="card">
-          <p className="muted">Aucun produit en stock pour l’instant.</p>
+          <p className="muted">Aucun produit ne correspond à cette recherche ou ces filtres.</p>
+        </section>
+      ) : filteredInStock.length === 0 ? (
+        <section className="card">
+          <p className="muted">Aucun produit ne correspond à cette recherche ou ce filtre.</p>
         </section>
       ) : (
         <section className="category-grid">
-          {groupedByCategory.map(({ label, items }) => (
+          {groupedByCategory.filter(({ items }) => items.length > 0).map(({ label, items }) => (
             <section key={label} className="card">
               <div className="category-head">
                 <h2 className="section-title" style={{ margin: 0 }}>
@@ -2543,6 +3153,48 @@ const renderStockTab = () => {
   );
 }; 
 
+    const openStockFromDashboard = (filter: StockFilter = 'all') => {
+      setActiveTab('stock');
+      setStockSearch('');
+      setStockFilter(filter);
+      setStockPlaceFilter('');
+      setStockSort('expiration');
+      setStockSortDirection('asc');
+    };
+
+    const openRecipesFromDashboard = () => {
+      setActiveTab('recipes');
+      setRecipesSubTab('feasible');
+      setRecipeSearch('');
+      setRecipeFilter('urgent');
+    };
+
+    const openTodayMealsFromDashboard = () => {
+      setActiveTab('weekmenu');
+      setWeekStart(startOfWeekMonday(new Date()));
+    };
+
+    const openPlanTodayFromDashboard = () => {
+      const today = new Date();
+
+      setWeekStart(startOfWeekMonday(today));
+      setPlanDate(toDateKey(today));
+      setPlanSlot('lunch');
+      setPlanRecipeValue('');
+      setPlanCustomName('');
+      setPlanCustomIngredients('');
+      setPlanServings('1');
+      setPlanNotes('');
+      setPlanKcalOverride('');
+      setActiveTab('weekmenu');
+      setPlanOpen(true);
+    };
+
+    const openShoppingFromDashboard = () => {
+      setActiveTab('shopping');
+      setShoppingSubTab('main');
+      setShoppingSearch('');
+    };
 
     const renderDashboard = () => (
     <>
@@ -2602,6 +3254,15 @@ const renderStockTab = () => {
       <section className="card card-soft">
         <h2 className="section-title">À consommer en priorité</h2>
         <p className="section-subtitle">Les produits les plus urgents à utiliser.</p>
+
+        <div className="field-row" style={{ marginBottom: '0.75rem' }}>
+          <button type="button" className="btn-tertiary" onClick={() => openStockFromDashboard('soon')}>
+            Voir le stock urgent
+          </button>
+          <button type="button" className="btn-tertiary" onClick={openRecipesFromDashboard}>
+            Trouver une recette
+          </button>
+        </div>
 
         {priorityList.length === 0 ? (
           <p className="muted">Aucune urgence pour le moment.</p>
@@ -2665,6 +3326,12 @@ const renderStockTab = () => {
           <h2 className="section-title">Périmés</h2>
           <p className="section-subtitle">À jeter / vérifier.</p>
 
+          <div className="field-row" style={{ marginBottom: '0.75rem' }}>
+            <button type="button" className="btn-tertiary" onClick={() => openStockFromDashboard('expired-dlc')}>
+              Voir les DLC périmées
+            </button>
+          </div>
+
           {expiredList.length === 0 ? (
             <p className="muted">Aucun produit périmé ✅</p>
           ) : (
@@ -2686,6 +3353,12 @@ const renderStockTab = () => {
         <section className="card card-soft">
           <h2 className="section-title">DDM dépassées</h2>
           <p className="section-subtitle">À vérifier, souvent encore consommable.</p>
+
+          <div className="field-row" style={{ marginBottom: '0.75rem' }}>
+            <button type="button" className="btn-tertiary" onClick={() => openStockFromDashboard('expired-ddm')}>
+              Voir les DDM dépassées
+            </button>
+          </div>
 
           {ddmExceededList.length === 0 ? (
             <p className="muted">Aucune DDM dépassée ✅</p>
@@ -2709,6 +3382,15 @@ const renderStockTab = () => {
       <section className="card">
         <h2 className="section-title">Repas du jour</h2>
         <p className="section-subtitle">Ce qui est prévu aujourd'hui.</p>
+        
+        <div className="field-row" style={{ marginBottom: '0.75rem' }}>
+          <button type="button" className="btn-tertiary" onClick={openTodayMealsFromDashboard}>
+            Ouvrir le menu
+          </button>
+          <button type="button" className="btn-tertiary" onClick={openPlanTodayFromDashboard}>
+            Planifier aujourd'hui
+          </button>
+        </div>
 
         {todayMeals.every(({ meal }) => !meal) ? (
           <p className="muted">Aucun repas planifié aujourd'hui.</p>
@@ -2724,10 +3406,12 @@ const renderStockTab = () => {
                   </span>
                 )}
                 {meal && (() => {
-                  const kcal = mealCalories(meal, dbRecipes, products);
+                  const calories = mealCaloriesInfo(meal, dbRecipes, products);
                   return (
                     <span className="dashboard-meal-kcal">
-                      {kcal != null ? `${kcal} kcal` : 'kcal à compléter'}
+                      {calories.kcal != null
+                        ? `${calories.approx ? '≈ ' : ''}${calories.kcal} kcal`
+                        : 'kcal à compléter'}
                     </span>
                   );
                 })()}
@@ -2740,6 +3424,15 @@ const renderStockTab = () => {
       <section className="card">
         <h2 className="section-title">Stock faible</h2>
         <p className="section-subtitle">Produits à racheter ou surveiller.</p>
+
+        <div className="field-row" style={{ marginBottom: '0.75rem' }}>
+          <button type="button" className="btn-tertiary" onClick={() => openStockFromDashboard('low')}>
+            Voir les stocks faibles
+          </button>
+          <button type="button" className="btn-tertiary" onClick={openShoppingFromDashboard}>
+            Ouvrir la liste de courses
+          </button>
+        </div>
 
         {lowStockList.length === 0 ? (
           <p className="muted">Aucun stock faible détecté.</p>
@@ -2758,11 +3451,28 @@ const renderStockTab = () => {
       </section>
 
       {/* Ajout produit */}
-      <section className="card">
-        <h2 className="section-title">Ajouter un produit</h2>
+      <section className="card" ref={addProductSectionRef}>
+       <h2 className="section-title">Ajouter un produit</h2>
         <p className="section-subtitle">
           Ajout rapide depuis le tableau de bord (scanner + auto-remplissage OpenFoodFacts).
         </p>
+
+        {addExistingProductId && (
+          <div className="info-text" style={{ marginBottom: '0.75rem' }}>
+            Produit existant sélectionné depuis la liste de courses. Tu ajoutes un nouveau lot à ce produit.
+            <button
+              type="button"
+              className="btn-tertiary"
+              style={{ marginLeft: '0.6rem' }}
+              onClick={() => {
+                resetAddForm();
+                setInfo(null);
+              }}
+            >
+              Annuler
+            </button>
+          </div>
+        )}
 
         <form className="form-grid" onSubmit={handleAdd}>
           <div className="field-group full">
@@ -2958,7 +3668,7 @@ const renderStockTab = () => {
 
           <div className="form-actions">
             <button type="submit" className="btn-primary">
-              Ajouter au stock
+              {addExistingProductId ? 'Ajouter ce lot au stock' : 'Ajouter au stock'}
             </button>
           </div>
 
@@ -2966,6 +3676,19 @@ const renderStockTab = () => {
             <p className="error-text" style={{ color: '#4b5563' }}>
               Recherche des informations du produit…
             </p>
+          )}
+          {info && <p className="info-text">{info}</p>}
+          {showBackToShoppingAfterAdd && (
+            <button
+              type="button"
+              className="btn-tertiary"
+              onClick={() => {
+                setActiveTab('shopping');
+                setShowBackToShoppingAfterAdd(false);
+              }}
+            >
+              Retour à la liste de courses
+            </button>
           )}
           {error && <p className="error-text">{error}</p>}
         </form>
@@ -3065,9 +3788,12 @@ const renderStockTab = () => {
     };
 
     for (const meal of weekMeals) {
-      if (!meal.ingredients || meal.consumed_at) continue;
+      if (meal.consumed_at) continue;
 
-      for (const ingredient of meal.ingredients) {
+      const mealIngredients = getMealIngredientsForStock(meal);
+      if (mealIngredients.length === 0) continue;
+
+      for (const ingredient of mealIngredients) {
         const parsed = parseSingleMealIngredient(ingredient);
         const missingIngredient = getMissingShoppingIngredient(parsed);
 
@@ -3103,11 +3829,18 @@ const renderStockTab = () => {
     const missingMain = products.filter((p) => p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
     const missingOthers = products.filter((p) => !p.is_main && !p.shopping_hidden && !presentProductIds.has(p.id));
     const currentList = shoppingSubTab === 'main' ? missingMain : missingOthers;
+    const shoppingFilterOptions: { value: ShoppingFilter; label: string }[] = [
+      { value: 'all', label: 'Tous' },
+      { value: 'low', label: 'Stock faible' },
+      { value: 'planned', label: 'Repas planifiés' },
+      { value: 'absent', label: 'Absents' },
+    ];
 
     const getShoppingReason = (product: Product) => {
       const isLowStock = lowStockByProductId.has(product.id);
       const isPlannedMissing = plannedMissingProductIds.has(product.id);
 
+      if (isLowStock && isPlannedMissing) return 'Stock faible + repas';
       if (isLowStock) return 'Stock faible';
       if (isPlannedMissing) return 'Repas planifié';
       return 'Absent';
@@ -3116,17 +3849,26 @@ const renderStockTab = () => {
     const getShoppingReasonPriority = (product: Product) => {
       const reason = getShoppingReason(product);
 
-      if (reason === 'Stock faible') return 0;
-      if (reason === 'Repas planifié') return 1;
-      return 2;
+      if (reason === 'Stock faible + repas') return 0;
+      if (reason === 'Stock faible') return 1;
+      if (reason === 'Repas planifié') return 2;
+      return 3;
     };
 
     const getShoppingReasonClass = (product: Product) => {
       const reason = getShoppingReason(product);
 
+      if (reason === 'Stock faible + repas') return 'shopping-product-reason--combo';
       if (reason === 'Stock faible') return 'shopping-product-reason--low';
       if (reason === 'Repas planifié') return 'shopping-product-reason--planned';
       return 'shopping-product-reason--absent';
+    };
+
+    const getLowStockLabel = (product: Product) => {
+      const stock = lowStockByProductId.get(product.id);
+      if (!stock) return null;
+
+      return `Stock restant : ${stock.quantity ?? 0} ${stock.unit ?? 'unité'}`;
     };
 
     const getPlannedMissingLabel = (product: Product) => {
@@ -3138,7 +3880,111 @@ const renderStockTab = () => {
       return planned.map(formatRecipeIngredient).join(', ');
     };
 
-    const sortedCurrentList = [...currentList].sort(
+    const reasonFilteredShoppingList = currentList.filter((product) => {
+      const isLowStock = lowStockByProductId.has(product.id);
+      const isPlannedMissing = plannedMissingProductIds.has(product.id);
+
+      if (shoppingFilter === 'low') return isLowStock;
+      if (shoppingFilter === 'planned') return isPlannedMissing;
+      if (shoppingFilter === 'absent') return !isLowStock && !isPlannedMissing;
+
+      return true;
+    });
+
+    const shoppingSearchKey = normalizeText(shoppingSearch);
+
+    const visibleShoppingList = shoppingSearchKey
+      ? reasonFilteredShoppingList.filter((product) => {
+          const plannedLabel = getPlannedMissingLabel(product);
+          const searchableText = [
+            product.name,
+            product.generic_name,
+            product.brand,
+            product.category,
+            product.sub_category,
+            product.barcode,
+            getShoppingReason(product),
+            getLowStockLabel(product),
+            plannedLabel,
+          ]
+            .filter(Boolean)
+            .map(String)
+            .map(normalizeText)
+            .join(' ');
+
+          return searchableText.includes(shoppingSearchKey);
+        })
+      : reasonFilteredShoppingList;
+
+    
+    const displayedShoppingList = hideCheckedShopping
+      ? visibleShoppingList.filter((product) => !checkedShoppingIds.includes(product.id))
+      : visibleShoppingList;
+
+    const visibleCheckedCount = visibleShoppingList.filter((product) =>
+      checkedShoppingIds.includes(product.id),
+    ).length;
+
+    const hasActiveShoppingControls =
+      shoppingSubTab !== 'main' ||
+      shoppingFilter !== 'all' ||
+      shoppingSearch.trim() ||
+      hideCheckedShopping;
+
+    const resetShoppingControls = () => {
+      setShoppingSubTab('main');
+      setShoppingFilter('all');
+      setShoppingSearch('');
+      setHideCheckedShopping(false);
+    };
+
+    const toggleShoppingChecked = (productId: string) => {
+      setCheckedShoppingIds((prev) =>
+        prev.includes(productId)
+          ? prev.filter((id) => id !== productId)
+          : [...prev, productId],
+      );
+    };
+
+    const startAddFromShopping = (product: Product) => {
+      const categoryValue = MAIN_CATEGORIES.includes(product.category as MainCategory)
+        ? (product.category as MainCategory)
+        : '';
+
+      const subcats = getSubcatsFor(categoryValue);
+      const subCategoryValue =
+        product.sub_category && subcats.includes(product.sub_category)
+          ? (product.sub_category as SubCategory)
+          : '';
+
+      const plannedLabel = getPlannedMissingLabel(product);
+      const plannedIngredient = plannedLabel
+        ? parseSingleMealIngredient(plannedLabel.split(',')[0])
+        : null;
+
+      setAddExistingProductId(product.id);
+      setName(product.name);
+      setGenericName(product.generic_name ?? getProductMatchName(product));
+      setBrand(product.brand ?? '');
+      setCategory(categoryValue);
+      setSubCategory(subCategoryValue);
+      setBarcode(product.barcode ?? '');
+      setQuantity(plannedIngredient?.amount != null ? String(plannedIngredient.amount) : '1');
+      setUnit(plannedIngredient?.unit ?? product.default_unit ?? 'unité');
+      setPlace(settings.defaultPlace);
+      setExpiration('');
+      setExpirationType('dlc');
+      setIsOpen(false);
+      setKcal100g(product.kcal_100g != null ? String(product.kcal_100g) : '');
+      setGramsPerUnit(product.grams_per_unit_g != null ? String(product.grams_per_unit_g) : '');
+      setDensityGml(product.density_g_ml != null ? String(product.density_g_ml) : '');
+      setError(null);
+      setActiveTab('dashboard');
+      setScrollToAddForm(true);
+      setInfo('✅ Formulaire prérempli depuis la liste de courses. Complète la quantité, le lieu et la date.');
+    };
+
+    const sortedCurrentList = [...displayedShoppingList].sort(
       (a, b) =>
         getShoppingReasonPriority(a) - getShoppingReasonPriority(b) ||
         a.name.localeCompare(b.name),
@@ -3189,6 +4035,61 @@ const renderStockTab = () => {
             </button>
           </div>
 
+          <div className="subtabs" style={{ marginTop: '0.6rem' }}>
+            {shoppingFilterOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={'subtab-btn' + (shoppingFilter === option.value ? ' subtab-btn--active' : '')}
+                onClick={() => setShoppingFilter(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="field-group full" style={{ marginTop: '0.75rem' }}>
+            <label className="field-label">Rechercher dans la liste</label>
+            <div className="field-row">
+              <input
+                className="field-input"
+                value={shoppingSearch}
+                onChange={(e) => setShoppingSearch(e.target.value)}
+                placeholder="Nom, marque, raison, quantité prévue..."
+              />
+              {shoppingSearch && (
+                <button type="button" className="btn-tertiary" onClick={() => setShoppingSearch('')}>
+                  Effacer
+                </button>
+              )}
+              {hasActiveShoppingControls && (
+                <button type="button" className="btn-tertiary" onClick={resetShoppingControls}>
+                  Réinitialiser les filtres
+                </button>
+              )}
+              {checkedShoppingIds.length > 0 && (
+                <button type="button" className="btn-tertiary" onClick={() => setCheckedShoppingIds([])}>
+                  Réinitialiser les coches
+                </button>
+              )}
+              {checkedShoppingIds.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-tertiary"
+                  onClick={() => setHideCheckedShopping((prev) => !prev)}
+                >
+                  {hideCheckedShopping ? 'Afficher les cochés' : 'Masquer les cochés'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {visibleShoppingList.length > 0 && (
+            <p className="muted" style={{ marginTop: '0.45rem' }}>
+              {visibleCheckedCount} coché(s) sur {visibleShoppingList.length} visible(s).
+            </p>
+          )}
+
           <h2 className="section-title" style={{ marginTop: '0.6rem' }}>
             {title}
           </h2>
@@ -3196,8 +4097,13 @@ const renderStockTab = () => {
 
           {info && <p className="info-text">{info}</p>}
 
+
           {currentList.length === 0 ? (
             <p className="muted">Tout est à jour ✅</p>
+          ) : visibleShoppingList.length === 0 ? (
+            <p className="muted">Aucun aliment ne correspond à cette recherche.</p>
+          ) : displayedShoppingList.length === 0 ? (
+            <p className="muted">Tous les aliments visibles sont cochés.</p>
           ) : (
             categoryOrder.map((cat) => {
               const items = grouped[cat];
@@ -3208,16 +4114,39 @@ const renderStockTab = () => {
                   <ul className="shopping-list">
                     {items.map((p) => {
                       const reason = getShoppingReason(p);
+                      const isChecked = checkedShoppingIds.includes(p.id);
                       return (
-                        <li key={p.id} className="shopping-list-item">
+                        <li key={p.id} className={'shopping-list-item' + (isChecked ? ' shopping-list-item--checked' : '')}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleShoppingChecked(p.id)}
+                            title="Marquer comme pris"
+                          />
                           <span className="shopping-product-name">{p.name}</span>
                           {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
+
+                          {getLowStockLabel(p) && (
+                            <span className="shopping-product-brand">
+                              {getLowStockLabel(p)}
+                            </span>
+                          )}
+
                           {getPlannedMissingLabel(p) && (
                             <span className="shopping-product-brand">
                               À prévoir : {getPlannedMissingLabel(p)}
                             </span>
                           )}
                           <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          
+                          
+                          <button
+                            type="button"
+                            className="btn-tertiary"
+                            onClick={() => startAddFromShopping(p)}
+                          >
+                            Ajouter au stock
+                          </button>
+                          
                           <button
                             type="button"
                             className="btn-tertiary"
@@ -3366,6 +4295,7 @@ const renderStockTab = () => {
               <p className="main-subtitle">Chargement des recettes…</p>
             </div>
           </div>
+          
           <section className="card">
             <p className="muted">Chargement…</p>
           </section>
@@ -3457,11 +4387,47 @@ const renderStockTab = () => {
       return { ...r, missing, missingCount, urgentIngredients, urgentCount, feasible };
     });
 
-    const feasibleList = enriched
+    const recipeSearchKey = normalize(recipeSearch);
+
+    const searchFilteredRecipes = recipeSearchKey
+      ? enriched.filter((recipe) => {
+          const searchableText = [
+            recipe.name,
+            recipe.kind,
+            recipe.tags?.join(' '),
+            recipe.ingredients.map((ing: RecipeIngredient) => ing.name).join(' '),
+            recipe.urgentIngredients.join(' '),
+            recipe.missing.join(' '),
+          ]
+            .filter(Boolean)
+            .map(String)
+            .map(normalize)
+            .join(' ');
+
+          return searchableText.includes(recipeSearchKey);
+        })
+      : enriched;
+
+    const recipeFilterOptions: { value: RecipeFilter; label: string }[] = [
+      { value: 'all', label: 'Toutes' },
+      { value: 'ready', label: '0 manquant' },
+      { value: 'urgent', label: 'À utiliser vite' },
+      { value: 'missing', label: 'Avec manquants' },
+    ];
+
+    const filteredRecipes = searchFilteredRecipes.filter((recipe) => {
+      if (recipeFilter === 'ready') return recipe.missingCount === 0;
+      if (recipeFilter === 'urgent') return recipe.urgentCount > 0;
+      if (recipeFilter === 'missing') return recipe.missingCount > 0;
+
+      return true;
+    });
+
+    const feasibleList = filteredRecipes
       .filter((r) => r.feasible)
       .sort((a, b) => b.urgentCount - a.urgentCount || a.missingCount - b.missingCount);
-    const current = recipesSubTab === 'feasible' ? feasibleList : enriched;
 
+    const current = recipesSubTab === 'feasible' ? feasibleList : filteredRecipes;
     const savory = current.filter((r) => r.kind === 'savory');
     const sweet = current.filter((r) => r.kind === 'sweet');
 
@@ -3491,14 +4457,24 @@ const renderStockTab = () => {
               {recipesSubTab === 'feasible' && <span className="recipe-badge">{badge}</span>}
 
               {isDbRecipe && (
-                <button
-                  type="button"
-                  className="recipe-delete-btn"
-                  onClick={() => void deleteRecipeInDb(r.id)}
-                  title="Supprimer cette recette"
-                >
-                  🗑️
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="recipe-delete-btn"
+                    onClick={() => openEditRecipe(r)}
+                    title="Modifier cette recette"
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    type="button"
+                    className="recipe-delete-btn"
+                    onClick={() => void deleteRecipeInDb(r.id)}
+                    title="Supprimer cette recette"
+                  >
+                    🗑️
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -3535,6 +4511,7 @@ const renderStockTab = () => {
           
           <div className="recipe-meta">
             🔥 {kcalR.approx ? '≈ ' : ''}{kcalR.kcal} kcal
+            {r.servings ? ` · ${r.servings} portion(s)` : ''}
             {kcalR.missingCount > 0 ? ` · (${kcalR.missingCount} ingrédient(s) non calculés)` : ''}
           </div>
           {recipesSubTab === 'feasible' && r.missingCount > 0 && (
@@ -3564,6 +4541,42 @@ const renderStockTab = () => {
           </div>
         </div>
 
+        <section className="card">
+          <div className="field-group full">
+            <label className="field-label">Rechercher une recette</label>
+            <div className="field-row">
+              <input
+                className="field-input"
+                value={recipeSearch}
+                onChange={(e) => setRecipeSearch(e.target.value)}
+                placeholder="Nom, ingrédient, type, ingrédient manquant..."
+              />
+              {recipeSearch && (
+                <button type="button" className="btn-tertiary" onClick={() => setRecipeSearch('')}>
+                  Effacer
+                </button>
+              )}
+            </div>
+
+            <div className="subtabs" style={{ marginTop: '0.6rem' }}>
+              {recipeFilterOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={'subtab-btn' + (recipeFilter === option.value ? ' subtab-btn--active' : '')}
+                  onClick={() => setRecipeFilter(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="muted" style={{ marginTop: '0.4rem' }}>
+              {current.length} recette(s) affichée(s) sur {enriched.length}.
+            </p>
+          </div>
+        </section>
+
         {/* ✅ Formulaire : Ajouter une recette (DB) */}
         <section className="card" style={{ marginBottom: '0.9rem' }}>
           <h2 className="section-title">Ajouter une recette</h2>
@@ -3591,6 +4604,18 @@ const renderStockTab = () => {
                 <option value="sweet">Sucré</option>
               </select>
             </div>
+
+            <div className="field-group">
+              <label className="field-label">Portions</label>
+              <input
+                className="field-input"
+                type="number"
+                min={1}
+                value={newRecipeServings}
+                onChange={(e) => setNewRecipeServings(e.target.value)}
+              />
+            </div>
+
 
             <div className="field-group full">
               <label className="field-label">Ingrédients (virgules)</label>
@@ -3697,7 +4722,74 @@ const renderStockTab = () => {
       {showScanner && (
         <BarcodeScanner onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />
       )}
-      {editOpen && editTarget && (
+
+      {editRecipeOpen && editRecipeTarget && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <div className="modal-head">
+              <h3 style={{ margin: 0 }}>Modifier une recette</h3>
+              <button type="button" className="modal-close" onClick={() => setEditRecipeOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: '0.5rem' }}>
+              <div className="field-group full">
+                <label className="field-label">Nom</label>
+                <input
+                  className="field-input"
+                  value={editRecipeName}
+                  onChange={(e) => setEditRecipeName(e.target.value)}
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Portions</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  value={editRecipeServings}
+                  onChange={(e) => setEditRecipeServings(e.target.value)}
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Type</label>
+                <select
+                  className="field-input"
+                  value={editRecipeKind}
+                  onChange={(e) => setEditRecipeKind(e.target.value as RecipeKind)}
+                >
+                  <option value="savory">Salé</option>
+                  <option value="sweet">Sucré</option>
+                </select>
+              </div>
+
+              <div className="field-group full">
+                <label className="field-label">Ingrédients</label>
+                <textarea
+                  className="field-input"
+                  value={editRecipeIngredients}
+                  onChange={(e) => setEditRecipeIngredients(e.target.value)}
+                  rows={4}
+                />
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setEditRecipeOpen(false)}>
+                Annuler
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void saveEditRecipe()}>
+                Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editOpen && editTarget && ( 
   <div className="modal-backdrop">
     <div className="modal-card">
       <div className="modal-head">
@@ -3812,6 +4904,13 @@ const renderStockTab = () => {
         </div>
       </div>
 
+      {autoFillLoading && (
+        <p className="error-text" style={{ color: '#4b5563' }}>
+          Recherche des informations du produit…
+        </p>
+      )}
+
+      {info && <p className="info-text">{info}</p>}
       {error && <p className="error-text">{error}</p>}
 
       <div className="modal-actions">
