@@ -9,6 +9,7 @@ type StockFilter = 'all' | 'soon' | 'expired' | 'expired-dlc' | 'expired-ddm' | 
 type ShoppingFilter = 'all' | 'low' | 'planned' | 'absent';
 type StockSort = 'expiration' | 'name' | 'quantity' | 'place';
 type StockSortDirection = 'asc' | 'desc';
+type StockShelfKind = 'pantry' | 'fridge' | 'freezer' | 'household' | 'medicine';
 type RecipeFilter = 'all' | 'ready' | 'urgent' | 'missing';
 type ExpirationStatus = 'ok' | 'soon' | 'expired';
 type ExpirationType = 'dlc' | 'ddm' | 'unknown';
@@ -111,6 +112,16 @@ const DEFAULT_SETTINGS: Settings = {
   defaultPlace: 'Placard',
   dailyCalorieGoal: 2200,
 };
+
+const DEFAULT_STOCK_PLACES = [
+  'Placard',
+  'Frigo',
+  'Congélateur',
+  'Produits ménagers',
+  'Médicaments',
+] as const;
+
+const STOCK_PLACE_PLACEHOLDER = DEFAULT_STOCK_PLACES.join(', ');
 
 type MealSlot = 'breakfast' | 'lunch' | 'dinner';
 
@@ -3343,13 +3354,23 @@ const hideFromShopping = async (productId: string) => {
 const renderStockTab = () => {
   const stockSearchKey = normalizeText(stockSearch);
 
-  const getShelfKind = (placeName: string) => {
+  const getShelfKind = (placeName: string): StockShelfKind => {
     const key = normalizeText(placeName);
 
     if (key.includes('frigo') || key.includes('refrigerateur')) return 'fridge';
     if (key.includes('congel')) return 'freezer';
+    if (key.includes('menager') || key.includes('entretien') || key.includes('maison')) return 'household';
+    if (key.includes('medicament') || key.includes('sante') || key.includes('pharmacie')) return 'medicine';
 
     return 'pantry';
+  };
+
+  const shelfKindLabels: Record<StockShelfKind, string> = {
+    pantry: 'Réserve',
+    fridge: 'Frais',
+    freezer: 'Surgelé',
+    household: 'Maison',
+    medicine: 'Santé',
   };
 
   const openAddProductFlow = () => {
@@ -3386,7 +3407,12 @@ const renderStockTab = () => {
     ),
   ).sort((a, b) => a.localeCompare(b));
 
-  const stockShelfCards = (stockPlaces.length > 0 ? stockPlaces : ['Placard', 'Frigo', 'Congélateur']).map((placeName) => {
+  const extraStockPlaces = stockPlaces.filter(
+    (placeName) => !DEFAULT_STOCK_PLACES.some((defaultPlace) => defaultPlace === placeName),
+  );
+  const stockShelfPlaces = [...DEFAULT_STOCK_PLACES, ...extraStockPlaces];
+
+  const stockShelfCards = stockShelfPlaces.map((placeName) => {
     const items = inStock.filter((item) => item.place?.trim() === placeName);
     const urgentCount = items.filter((item) => {
       const status = getExpirationStatus(item.expiration_date, settings.soonDays);
@@ -3405,7 +3431,7 @@ const renderStockTab = () => {
 
   const filteredInStock = searchFilteredInStock.filter((item) => {
     const status = getExpirationStatus(item.expiration_date, settings.soonDays);
-    if (stockPlaceFilter && item.place !== stockPlaceFilter) return false;
+    if (stockPlaceFilter && item.place?.trim() !== stockPlaceFilter) return false;
     if (stockFilter === 'soon') return status === 'soon';
     if (stockFilter === 'expired') return status === 'expired';
     if (stockFilter === 'expired-dlc') return status === 'expired' && item.expiration_type === 'dlc';
@@ -3446,7 +3472,7 @@ const renderStockTab = () => {
     { value: inStock.length, label: 'produits suivis' },
     { value: priorityList.length, label: 'à surveiller' },
     { value: lowStockList.length, label: 'stocks faibles' },
-    { value: stockPlaces.length || stockShelfCards.length, label: 'lieux' },
+    { value: stockShelfCards.length, label: 'zones' },
   ];
 
   const stockHeroItem = priorityList[0];
@@ -3737,16 +3763,18 @@ const renderStockTab = () => {
           <button
             key={card.placeName}
             type="button"
-            className={`shelf-card shelf-card--${card.kind}${stockPlaceFilter === card.placeName ? ' shelf-card--active' : ''}`}
+            className={`shelf-card shelf-card--${card.kind}${stockPlaceFilter === card.placeName ? ' shelf-card--active' : ''}${card.count === 0 ? ' shelf-card--empty' : ''}`}
             onClick={() => setStockPlaceFilter(stockPlaceFilter === card.placeName ? '' : card.placeName)}
           >
             <span className="shelf-card-visual" aria-hidden="true" />
-            <span className="shelf-card-kicker">
-              {card.kind === 'fridge' ? 'Frais' : card.kind === 'freezer' ? 'Froid' : 'Réserve'}
-            </span>
+            <span className="shelf-card-kicker">{shelfKindLabels[card.kind]}</span>
             <strong>{card.placeName}</strong>
-            <span>{pluralize(card.count, 'produit')}</span>
-            <span>{pluralize(card.urgentCount, 'alerte')} · {pluralize(card.lowCount, 'stock faible', 'stocks faibles')}</span>
+            <span>{card.count > 0 ? pluralize(card.count, 'produit') : 'Vide pour l’instant'}</span>
+            <span>
+              {card.count > 0
+                ? `${pluralize(card.urgentCount, 'alerte')} · ${pluralize(card.lowCount, 'stock faible', 'stocks faibles')}`
+                : 'Prêt à remplir'}
+            </span>
           </button>
         ))}
       </section>
@@ -3808,16 +3836,16 @@ const renderStockTab = () => {
             </select>
           </div>
 
-          {stockPlaces.length > 0 && (
+          {stockShelfPlaces.length > 0 && (
             <div className="field-group">
-              <label className="field-label">Filtrer par lieu</label>
+              <label className="field-label">Filtrer par zone</label>
               <select
                 className="field-input"
                 value={stockPlaceFilter}
                 onChange={(e) => setStockPlaceFilter(e.target.value)}
               >
-                <option value="">Tous les lieux</option>
-                {stockPlaces.map((placeName) => (
+                <option value="">Toutes les zones</option>
+                {stockShelfPlaces.map((placeName) => (
                   <option key={placeName} value={placeName}>
                     {placeName}
                   </option>
@@ -4028,7 +4056,7 @@ const renderStockTab = () => {
         <div className="stat-card">
           <div className="stat-label">En cuisine</div>
           <div className="stat-value">{totalItems}</div>
-          <div className="stat-foot">Placard, frigo, congélateur</div>
+          <div className="stat-foot">5 zones de stock prêtes</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">À sauver bientôt</div>
@@ -4412,7 +4440,7 @@ const renderStockTab = () => {
               value={place}
               onChange={(e) => setPlace(e.target.value)}
               className="field-input"
-              placeholder="Placard, frigo, congélateur..."
+              placeholder={STOCK_PLACE_PLACEHOLDER}
             />
           </div>
 
@@ -5198,7 +5226,7 @@ const renderStockTab = () => {
                 setSettingsInfo(null);
               }}
               className="field-input"
-              placeholder="Placard, Frigo, Congélateur..."
+              placeholder={STOCK_PLACE_PLACEHOLDER}
             />
           </div>
         ),

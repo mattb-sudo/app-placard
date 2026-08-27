@@ -2051,6 +2051,21 @@ body {
   background: #56a6d7;
 }
 
+.shelf-card--household::after {
+  background: #56305e;
+}
+
+.shelf-card--medicine::after {
+  background: #cc3b2e;
+}
+
+.shelf-card--empty {
+  border-style: dashed;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(241, 247, 240, 0.68)),
+    #ffffff;
+}
+
 .shelf-card-visual {
   position: absolute;
   right: 0.85rem;
@@ -2086,11 +2101,29 @@ body {
   border-color: rgba(44, 111, 180, 0.34);
 }
 
+.shelf-card--household .shelf-card-visual {
+  border-color: rgba(86, 48, 94, 0.34);
+}
+
+.shelf-card--medicine .shelf-card-visual {
+  border-color: rgba(204, 59, 46, 0.34);
+}
+
 .shelf-card--fridge .shelf-card-visual::before,
 .shelf-card--fridge .shelf-card-visual::after,
 .shelf-card--freezer .shelf-card-visual::before,
 .shelf-card--freezer .shelf-card-visual::after {
   background: rgba(44, 111, 180, 0.34);
+}
+
+.shelf-card--household .shelf-card-visual::before,
+.shelf-card--household .shelf-card-visual::after {
+  background: rgba(86, 48, 94, 0.34);
+}
+
+.shelf-card--medicine .shelf-card-visual::before,
+.shelf-card--medicine .shelf-card-visual::after {
+  background: rgba(204, 59, 46, 0.34);
 }
 
 .shelf-card:hover {
@@ -2111,6 +2144,22 @@ body {
   font-size: 0.72rem;
   font-weight: 820;
   text-transform: uppercase;
+}
+
+.shelf-card--fridge .shelf-card-kicker {
+  color: #2c6fb4;
+}
+
+.shelf-card--freezer .shelf-card-kicker {
+  color: #2f85b6;
+}
+
+.shelf-card--household .shelf-card-kicker {
+  color: #56305e;
+}
+
+.shelf-card--medicine .shelf-card-kicker {
+  color: #cc3b2e;
 }
 
 .shelf-card strong {
