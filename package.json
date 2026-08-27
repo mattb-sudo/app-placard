@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "seed:media": "node scripts/seed-vplacard-media.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

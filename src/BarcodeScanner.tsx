@@ -13,6 +13,8 @@ type Props = {
 const cleanBarcode = (raw: string): string =>
   String(raw).replace(/[^\d]/g, '').trim();
 
+type ScannerConfig = NonNullable<ConstructorParameters<typeof Html5QrcodeScanner>[1]>;
+
 export function BarcodeScanner({ onDetected, onClose }: Props) {
   useEffect(() => {
     const formatsToSupport = [
@@ -22,8 +24,7 @@ export function BarcodeScanner({ onDetected, onClose }: Props) {
       Html5QrcodeSupportedFormats.UPC_E,
     ];
 
-    // Certaines versions de html5-qrcode ne typent pas toutes les options → cast "any"
-    const config: any = {
+    const config: ScannerConfig = {
       fps: 12,
 
       // zone rectangulaire (plus large) = mieux pour codes-barres
@@ -58,9 +59,7 @@ export function BarcodeScanner({ onDetected, onClose }: Props) {
       onClose();
     };
 
-    const onScanError = (_error: unknown) => {
-      // ignore
-    };
+    const onScanError = () => {};
 
     scanner.render(onScanSuccess, onScanError);
 
@@ -69,18 +68,24 @@ export function BarcodeScanner({ onDetected, onClose }: Props) {
     };
   }, [onDetected, onClose]);
 
-  return (
-    <div className="scanner-backdrop">
-      <div className="scanner-modal">
-        <div className="scanner-header">
-          <span>Scanner un code-barres</span>
-          <button type="button" className="scanner-close" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+	  return (
+	    <div className="scanner-backdrop">
+	      <div className="scanner-modal">
+	        <div className="scanner-header">
+	          <div>
+	            <p className="scanner-kicker">Ajout rapide</p>
+	            <span>Scanner un produit</span>
+	          </div>
+	          <button type="button" className="scanner-close" aria-label="Fermer le scanner" onClick={onClose}>
+	            ✕
+	          </button>
+	        </div>
+	        <p className="scanner-copy">
+	          Cadre le code-barres : VPlacard complète la fiche dès qu'il reconnaît le produit.
+	        </p>
 
-        <div id="barcode-reader" style={{ width: '100%', minHeight: 260 }} />
-      </div>
+	        <div id="barcode-reader" style={{ width: '100%', minHeight: 260 }} />
+	      </div>
     </div>
   );
 }

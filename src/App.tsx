@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { CSSProperties, ChangeEvent, FormEvent, ReactNode } from 'react';
 import { supabase } from './supabaseClient';
 import { BarcodeScanner } from './BarcodeScanner';
 import './App.css';
@@ -36,7 +36,8 @@ type SubCategory =
 
 // helper
 function getSubcatsFor(cat: MainCategory | ''): readonly string[] {
-  return (SUBCATS as any)[cat] ?? [];
+  if (!cat || !(cat in SUBCATS)) return [];
+  return SUBCATS[cat as keyof typeof SUBCATS];
 }
 
 type IngredientUnit = 'g' | 'ml' | 'unité';
@@ -89,6 +90,14 @@ type Recipe = {
   tags?: string[];
 };
 
+type EnrichedRecipe = Recipe & {
+  missing: string[];
+  missingCount: number;
+  urgentIngredients: string[];
+  urgentCount: number;
+  feasible: boolean;
+};
+
 type Settings = {
   soonDays: number;
   recipesMaxMissing: number;
@@ -125,8 +134,272 @@ type WeekMeal = {
   consumed_at: string | null;
 };
 
+type ProductRow = {
+  id: string;
+  name: string;
+  generic_name: string | null;
+  brand: string | null;
+  category: string | null;
+  sub_category: string | null;
+  default_unit: string | null;
+  barcode: string | null;
+  shopping_hidden: boolean | null;
+  is_main: boolean | null;
+  kcal_100g: number | null;
+  kcal_serving: number | null;
+  serving_size_g: number | null;
+  grams_per_unit_g: number | null;
+  density_g_ml: number | null;
+};
+
+type StockRow = {
+  id: string;
+  place: string | null;
+  quantity: number | null;
+  unit: string | null;
+  expiration_date: string | null;
+  expiration_type: string | null;
+  is_open: boolean | null;
+  product?: ProductRow | ProductRow[] | null;
+};
+
+type WeekMealRow = {
+  id: string;
+  meal_date: string;
+  meal_slot: string;
+  recipe_id: string | null;
+  recipe_name: string | null;
+  recipe_kind: string | null;
+  ingredients: string[] | null;
+  kcal_override: number | null;
+  servings: number | null;
+  notes: string | null;
+  consumed_at: string | null;
+};
+
+type RecipeIngredientRow = {
+  ingredient: string | null;
+  position: number | null;
+  amount: number | null;
+  unit: string | null;
+};
+
+type RecipeRow = {
+  id: string;
+  name: string;
+  kind: string;
+  servings: number | null;
+  recipe_ingredients: RecipeIngredientRow[] | null;
+};
+
+type ImageAssetKind = 'app' | 'recipe';
+
+type ImageAssetRow = {
+  kind: string;
+  image_key: string;
+  path: string | null;
+  public_url: string | null;
+};
+
+type RecipeOverrideRow = {
+  recipe_id: string;
+  name: string | null;
+  kind: string | null;
+  ingredients: unknown;
+  servings: number | string | null;
+};
+
+function toExpirationType(value: string | null | undefined): ExpirationType {
+  if (value === 'dlc' || value === 'ddm' || value === 'unknown') return value;
+  return 'dlc';
+}
+
+function toRecipeKind(value: string | null | undefined): RecipeKind | null {
+  if (value === 'savory' || value === 'sweet') return value;
+  return null;
+}
+
+function toIngredientUnit(value: string | null | undefined): IngredientUnit | null {
+  if (value === 'g' || value === 'ml' || value === 'unité') return value;
+  return null;
+}
+
+function normalizeProductRow(product: ProductRow): Product {
+  return {
+    id: product.id,
+    name: product.name,
+    generic_name: product.generic_name ?? null,
+    brand: product.brand,
+    category: product.category,
+    sub_category: product.sub_category ?? null,
+    default_unit: product.default_unit,
+    barcode: product.barcode ?? null,
+    shopping_hidden: !!product.shopping_hidden,
+    is_main: !!product.is_main,
+    kcal_100g: product.kcal_100g ?? null,
+    kcal_serving: product.kcal_serving ?? null,
+    serving_size_g: product.serving_size_g ?? null,
+    grams_per_unit_g: product.grams_per_unit_g ?? null,
+    density_g_ml: product.density_g_ml ?? null,
+  };
+}
+
+function normalizeProductRelation(product: ProductRow | ProductRow[] | null | undefined): Product | null {
+  const row = Array.isArray(product) ? product[0] : product;
+  return row ? normalizeProductRow(row) : null;
+}
+
+function normalizeStockRow(row: StockRow): StockItem {
+  return {
+    id: row.id,
+    place: row.place,
+    quantity: row.quantity,
+    unit: row.unit,
+    expiration_date: row.expiration_date,
+    expiration_type: toExpirationType(row.expiration_type),
+    is_open: !!row.is_open,
+    product: normalizeProductRelation(row.product),
+  };
+}
+
+function getErrorMessage(error: unknown): string | null {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : null;
+  }
+  return null;
+}
+
 const SETTINGS_STORAGE_KEY = 'pantrypilot_settings_v1';
 const SHOPPING_CHECKED_STORAGE_KEY = 'pantrypilot_checked_shopping_v1';
+const MEDIA_BUCKET = 'vplacard-media';
+const IMAGE_FILE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
+const SUPABASE_PUBLIC_URL = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/$/, '');
+
+function mediaPublicUrl(path: string): string {
+  return `${SUPABASE_PUBLIC_URL}/storage/v1/object/public/${MEDIA_BUCKET}/${path}`;
+}
+
+type RecipeOverride = {
+  name: string;
+  kind: RecipeKind;
+  ingredients: RecipeIngredient[];
+  servings: number | null;
+};
+
+type AppImageKey =
+  | 'dashboardHero'
+  | 'stockHero'
+  | 'stockEmpty'
+  | 'shoppingHero'
+  | 'shoppingEmpty'
+  | 'planningHero'
+  | 'historyHero'
+  | 'historyEmpty';
+
+type AppImages = Record<AppImageKey, string>;
+
+const DEFAULT_APP_IMAGE_PATHS: Record<AppImageKey, string> = {
+  dashboardHero: 'app/default-dashboard-hero.jpg',
+  stockHero: 'app/default-stock-hero.jpg',
+  stockEmpty: 'app/default-stock-empty.jpg',
+  shoppingHero: 'app/default-shopping-hero.jpg',
+  shoppingEmpty: 'app/default-shopping-empty.jpg',
+  planningHero: 'app/default-planning-hero.jpg',
+  historyHero: 'app/default-history-hero.jpg',
+  historyEmpty: 'app/default-history-empty.jpg',
+};
+
+const DEFAULT_APP_IMAGES: AppImages = {
+  dashboardHero: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.dashboardHero),
+  stockHero: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.stockHero),
+  stockEmpty: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.stockEmpty),
+  shoppingHero: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.shoppingHero),
+  shoppingEmpty: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.shoppingEmpty),
+  planningHero: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.planningHero),
+  historyHero: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.historyHero),
+  historyEmpty: mediaPublicUrl(DEFAULT_APP_IMAGE_PATHS.historyEmpty),
+};
+
+const APP_IMAGE_FIELDS: { key: AppImageKey; label: string; description: string }[] = [
+  { key: 'dashboardHero', label: "Aujourd'hui", description: 'Bandeau principal' },
+  { key: 'stockHero', label: 'Stock', description: 'Inventaire' },
+  { key: 'stockEmpty', label: 'Stock vide', description: 'Aucun produit' },
+  { key: 'shoppingHero', label: 'Courses', description: 'Préparation achats' },
+  { key: 'shoppingEmpty', label: 'Courses vides', description: 'Liste terminée' },
+  { key: 'planningHero', label: 'Planning', description: 'Menu de semaine' },
+  { key: 'historyHero', label: 'Historique', description: 'Anciens achats' },
+  { key: 'historyEmpty', label: 'Historique vide', description: 'Aucun ancien achat' },
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sanitizeImageUrl(value: string): string {
+  return value.trim();
+}
+
+function cssImageUrl(value: string): string {
+  const safeValue = sanitizeImageUrl(value);
+  return safeValue ? `url("${safeValue.replace(/"/g, '%22')}")` : 'none';
+}
+
+function normalizeStoredIngredients(value: unknown): RecipeIngredient[] | null {
+  if (!Array.isArray(value)) return null;
+
+  const ingredients = value
+    .filter(isRecord)
+    .map((ingredient) => ({
+      name: typeof ingredient.name === 'string' ? ingredient.name : '',
+      amount: typeof ingredient.amount === 'number' && Number.isFinite(ingredient.amount) ? ingredient.amount : null,
+      unit: typeof ingredient.unit === 'string' ? toIngredientUnit(ingredient.unit) : null,
+    }))
+    .filter((ingredient) => ingredient.name.trim());
+
+  return ingredients.length > 0 ? ingredients : null;
+}
+
+function isAppImageKey(value: string): value is AppImageKey {
+  return APP_IMAGE_FIELDS.some((field) => field.key === value);
+}
+
+function normalizeRecipeOverrideRow(row: RecipeOverrideRow): [string, RecipeOverride] | null {
+  const recipeId = row.recipe_id.trim();
+  const name = row.name?.trim() ?? '';
+  const kind = toRecipeKind(row.kind);
+  const ingredients = normalizeStoredIngredients(row.ingredients);
+  const servings = row.servings != null && Number.isFinite(Number(row.servings))
+    ? Number(row.servings)
+    : null;
+
+  if (!recipeId || !name || !kind || !ingredients) return null;
+  return [recipeId, { name, kind, ingredients, servings }];
+}
+
+function getImageExtension(file: File): string {
+  const extensionFromName = file.name.split('.').pop()?.toLowerCase();
+  if (extensionFromName && ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(extensionFromName)) {
+    return extensionFromName === 'jpeg' ? 'jpg' : extensionFromName;
+  }
+
+  if (file.type === 'image/png') return 'png';
+  if (file.type === 'image/webp') return 'webp';
+  if (file.type === 'image/gif') return 'gif';
+  return 'jpg';
+}
+
+function slugifyPathPart(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+
+  return slug || 'image';
+}
 
 const si = (...names: string[]): RecipeIngredient[] =>
   names.map((n) => ({ name: n, amount: null, unit: null }));
@@ -309,6 +582,37 @@ const SAMPLE_RECIPES: Recipe[] = [
   { id: 'porridge', name: 'Porridge', kind: 'sweet', ingredients: [qi('flocon avoine', 60, 'g'), qi('lait', 250, 'ml'), qi('banane', 1, 'unité'), qi('miel', 15, 'g')], servings: 1, tags: ['petit dej'] },
 ];
 
+const RECIPE_IMAGE_POOL: Record<RecipeKind, string[]> = {
+  savory: [
+    mediaPublicUrl('recipes/default-savory-1.jpg'),
+    mediaPublicUrl('recipes/default-savory-2.jpg'),
+    mediaPublicUrl('recipes/default-savory-3.jpg'),
+    mediaPublicUrl('recipes/default-savory-4.jpg'),
+  ],
+  sweet: [
+    mediaPublicUrl('recipes/default-sweet-1.jpg'),
+    mediaPublicUrl('recipes/default-sweet-2.jpg'),
+    mediaPublicUrl('recipes/default-sweet-3.jpg'),
+    mediaPublicUrl('recipes/default-sweet-4.jpg'),
+  ],
+};
+
+function recipeImageFor(recipe: Recipe, recipeImages: Record<string, string> = {}): string {
+  const customImage = sanitizeImageUrl(recipeImages[recipe.id] ?? '');
+  if (customImage) return customImage;
+
+  const pool = RECIPE_IMAGE_POOL[recipe.kind];
+  const index = recipe.id
+    .split('')
+    .reduce((total, char) => total + char.charCodeAt(0), 0) % pool.length;
+
+  return pool[index];
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function normalizeText(s: string): string {
   return s
     .toLowerCase()
@@ -399,7 +703,7 @@ function roundQty(value: number, unit: string | null): number {
   return Math.round(value * 10) / 10;
 }
 
-function toNum(v: any): number | null {
+function toNum(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(String(v).replace(',', '.'));
   return Number.isFinite(n) ? n : null;
@@ -599,9 +903,10 @@ function parseRecipeIngredients(text: string): RecipeIngredient[] {
       // ex: "farine 200 g"
       const m = part.match(/^(.+?)(?:\s+(\d+(?:[.,]\d+)?))?\s*(g|ml|unité)?$/i);
       const name = (m?.[1] ?? part).trim();
-      const amount = m?.[2] ? Number(String(m[2]).replace(',', '.')) : null;
-      const unit = (m?.[3]?.toLowerCase() as IngredientUnit) ?? null;
-      return { name, amount: Number.isFinite(amount as any) ? amount : null, unit };
+      const parsedAmount = m?.[2] ? Number(String(m[2]).replace(',', '.')) : null;
+      const amount = parsedAmount != null && Number.isFinite(parsedAmount) ? parsedAmount : null;
+      const unit = toIngredientUnit(m?.[3]?.toLowerCase());
+      return { name, amount, unit };
     });
 }
 
@@ -652,13 +957,12 @@ function quantityToSubtract(ingredient: RecipeIngredient, stockUnit: string | nu
 }
 
 const navItems: { key: Tab; label: string; icon: string }[] = [
-  { key: 'dashboard', label: 'Tableau de bord', icon: '✨' },
-  { key: 'stock', label: 'Placards & frigo', icon: '🧺' },
-  { key: 'history', label: 'Anciens achats', icon: '🕘' },
-  { key: 'weekmenu', label: 'Menu semaine', icon: '📅' },
-  { key: 'shopping', label: 'Listes de courses', icon: '🛒' },
-  { key: 'recipes', label: 'Recettes', icon: '🍽️' },
-  { key: 'settings', label: 'Réglages', icon: '⚙️' },
+  { key: 'dashboard', label: "Aujourd'hui", icon: 'today' },
+  { key: 'stock', label: 'Stock', icon: 'stock' },
+  { key: 'recipes', label: 'Cuisiner', icon: 'cook' },
+  { key: 'weekmenu', label: 'Planning', icon: 'plan' },
+  { key: 'shopping', label: 'Courses', icon: 'cart' },
+  { key: 'settings', label: 'Réglages', icon: 'settings' },
 ];
 
 function App() {
@@ -701,6 +1005,10 @@ function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsInfo, setSettingsInfo] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [appImages, setAppImages] = useState<AppImages>(DEFAULT_APP_IMAGES);
+  const [recipeImages, setRecipeImages] = useState<Record<string, string>>({});
+  const [recipeOverrides, setRecipeOverrides] = useState<Record<string, RecipeOverride>>({});
+  const [imageUploadingKey, setImageUploadingKey] = useState<string | null>(null);
 
   // Form stock
   const [name, setName] = useState('');
@@ -730,12 +1038,19 @@ function App() {
   const [newRecipeKind, setNewRecipeKind] = useState<RecipeKind>('savory');
   const [newRecipeServings, setNewRecipeServings] = useState('1');
   const [newRecipeIngredients, setNewRecipeIngredients] = useState('');
+  const [newRecipeImageFile, setNewRecipeImageFile] = useState<File | null>(null);
+  const [newRecipeImagePreview, setNewRecipeImagePreview] = useState('');
+  const [newRecipeOpen, setNewRecipeOpen] = useState(false);
   const [editRecipeOpen, setEditRecipeOpen] = useState(false);
   const [editRecipeTarget, setEditRecipeTarget] = useState<Recipe | null>(null);
   const [editRecipeName, setEditRecipeName] = useState('');
   const [editRecipeKind, setEditRecipeKind] = useState<RecipeKind>('savory');
   const [editRecipeServings, setEditRecipeServings] = useState('1');
   const [editRecipeIngredients, setEditRecipeIngredients] = useState('');
+  const [editRecipeImageFile, setEditRecipeImageFile] = useState<File | null>(null);
+  const [editRecipeImagePreview, setEditRecipeImagePreview] = useState('');
+  const newRecipeImagePreviewRef = useRef<string | null>(null);
+  const editRecipeImagePreviewRef = useRef<string | null>(null);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<StockItem | null>(null);
@@ -813,6 +1128,107 @@ function App() {
       console.error(e);
     }
   }, [settings]);
+
+  useEffect(() => {
+    return () => {
+      if (newRecipeImagePreviewRef.current) URL.revokeObjectURL(newRecipeImagePreviewRef.current);
+      if (editRecipeImagePreviewRef.current) URL.revokeObjectURL(editRecipeImagePreviewRef.current);
+    };
+  }, []);
+
+  const setNewRecipeImageSelection = (file: File | null) => {
+    if (newRecipeImagePreviewRef.current) URL.revokeObjectURL(newRecipeImagePreviewRef.current);
+
+    const previewUrl = file ? URL.createObjectURL(file) : '';
+    newRecipeImagePreviewRef.current = previewUrl || null;
+    setNewRecipeImageFile(file);
+    setNewRecipeImagePreview(previewUrl);
+  };
+
+  const setEditRecipeImageSelection = (file: File | null) => {
+    if (editRecipeImagePreviewRef.current) URL.revokeObjectURL(editRecipeImagePreviewRef.current);
+
+    const previewUrl = file ? URL.createObjectURL(file) : '';
+    editRecipeImagePreviewRef.current = previewUrl || null;
+    setEditRecipeImageFile(file);
+    setEditRecipeImagePreview(previewUrl);
+  };
+
+  const buildMediaPath = (kind: ImageAssetKind, imageKey: string, file: File): string => {
+    const folder = kind === 'app' ? 'app' : 'recipes';
+    const extension = getImageExtension(file);
+    const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+
+    return `${folder}/${slugifyPathPart(imageKey)}-${Date.now()}-${randomPart}.${extension}`;
+  };
+
+  const uploadImageAsset = async (kind: ImageAssetKind, imageKey: string, file: File): Promise<string> => {
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      throw new Error('Choisis une image JPG, PNG, WebP ou GIF.');
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('La photo doit faire moins de 5 Mo.');
+    }
+
+    const path = buildMediaPath(kind, imageKey, file);
+    const { error: uploadError } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .upload(path, file, {
+        cacheControl: '31536000',
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(path);
+    const publicUrl = data.publicUrl;
+    const { error: assetError } = await supabase
+      .from('image_assets')
+      .upsert(
+        {
+          kind,
+          image_key: imageKey,
+          path,
+          public_url: publicUrl,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'kind,image_key' },
+      );
+
+    if (assetError) throw assetError;
+
+    if (kind === 'app' && isAppImageKey(imageKey)) {
+      setAppImages((prev) => ({ ...prev, [imageKey]: publicUrl }));
+    } else if (kind === 'recipe') {
+      setRecipeImages((prev) => ({ ...prev, [imageKey]: publicUrl }));
+    }
+
+    return publicUrl;
+  };
+
+  const resetImageAsset = async (kind: ImageAssetKind, imageKey: string) => {
+    const { error: deleteError } = await supabase
+      .from('image_assets')
+      .delete()
+      .eq('kind', kind)
+      .eq('image_key', imageKey);
+
+    if (deleteError) throw deleteError;
+
+    if (kind === 'app' && isAppImageKey(imageKey)) {
+      setAppImages((prev) => ({ ...prev, [imageKey]: DEFAULT_APP_IMAGES[imageKey] }));
+    } else if (kind === 'recipe') {
+      setRecipeImages((prev) => {
+        const next = { ...prev };
+        delete next[imageKey];
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (activeTab !== 'dashboard' || !scrollToAddForm) return;
@@ -918,6 +1334,9 @@ function App() {
                         ? (editSubCategory || null)
                         : null,
                     barcode: editBarcode.trim() || null,
+                    kcal_100g: editKcal100g ? Number(editKcal100g) : null,
+                    grams_per_unit_g: editGramsPerUnit ? Number(editGramsPerUnit) : null,
+                    density_g_ml: editDensityGml ? Number(editDensityGml) : null,
                   }
                 : null,
             }
@@ -935,6 +1354,9 @@ function App() {
               brand: editBrand.trim() || null,
               category: editCategory ? editCategory : null,
               barcode: editBarcode.trim() || null,
+              kcal_100g: editKcal100g ? Number(editKcal100g) : null,
+              grams_per_unit_g: editGramsPerUnit ? Number(editGramsPerUnit) : null,
+              density_g_ml: editDensityGml ? Number(editDensityGml) : null,
             }
           : p,
       ),
@@ -942,9 +1364,10 @@ function App() {
 
     setEditOpen(false);
     setEditTarget(null);
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error(e);
-    setError(e?.message ? `Erreur: ${e.message}` : "Erreur lors de l'enregistrement.");
+    const message = getErrorMessage(e);
+    setError(message ? `Erreur: ${message}` : "Erreur lors de l'enregistrement.");
   } finally {
     setEditSaving(false);
   }
@@ -963,21 +1386,20 @@ const fetchWeekMeals = async (start: Date) => {
     .lte('meal_date', to)
     .order('meal_date', { ascending: true });
 
-  if (error) {
-    console.error(error);
-    setError("Impossible de charger le menu de la semaine.");
-    setWeekMeals([]);
-    setWeekMealsLoading(false);
-    return;
-  }
+	  if (error) {
+	    console.error(error);
+	    setWeekMeals([]);
+	    setWeekMealsLoading(false);
+	    return;
+	  }
 
-  const normalized: WeekMeal[] = (data ?? []).map((r: any) => ({
+  const normalized: WeekMeal[] = ((data ?? []) as WeekMealRow[]).map((r) => ({
   id: r.id,
   meal_date: r.meal_date,
-  meal_slot: r.meal_slot as MealSlot,
+  meal_slot: (r.meal_slot as MealSlot) ?? 'lunch',
   recipe_id: r.recipe_id ?? null,
   recipe_name: String(r.recipe_name ?? ''),
-  recipe_kind: (r.recipe_kind as RecipeKind) ?? null,
+  recipe_kind: toRecipeKind(r.recipe_kind),
   ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(String) : null,
   kcal_override: r.kcal_override ?? null,     // ✅ AJOUT
   servings: r.servings ?? null,
@@ -1015,12 +1437,12 @@ useEffect(() => {
   // si la catégorie ne supporte pas de sous-cat, on vide
   if (getSubcatsFor(category).length === 0) setSubCategory('');
   else if (subCategory && !getSubcatsFor(category).includes(subCategory)) setSubCategory('');
-}, [category]);
+}, [category, subCategory]);
 
 useEffect(() => {
   if (getSubcatsFor(editCategory).length === 0) setEditSubCategory('');
   else if (editSubCategory && !getSubcatsFor(editCategory).includes(editSubCategory)) setEditSubCategory('');
-}, [editCategory]);
+}, [editCategory, editSubCategory]);
 
   // ---------- OFF autofill ----------
   const autofillFromBarcode = async (code: string) => {
@@ -1188,14 +1610,14 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
 
         shoppingMessage =
           createdCount > 0
-            ? ` ${createdCount} ingrédient(s) ajouté(s) à la liste de courses.`
+            ? ` ${pluralize(createdCount, 'ingrédient')} ajouté${createdCount > 1 ? 's' : ''} à la liste de courses.`
             : ' Ingrédients manquants déjà présents dans la liste de courses.';
       } catch (e) {
         console.error(e);
         shoppingMessage = " Impossible d'ajouter les ingrédients manquants à la liste de courses.";
       }
     }    
-    setInfo(`✅ Repas validé. ${stockMessage}${missingMessage}${shoppingMessage}`); 
+    setInfo(`Repas validé. ${stockMessage}${missingMessage}${shoppingMessage}`);
   };
 
   const handleBarcodeDetected = (raw: string) => {
@@ -1243,43 +1665,11 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         )
         .order('expiration_date', { ascending: true });
 
-      if (stockError) {
-        console.error(stockError);
-        setError('Impossible de charger les stocks');
-      } else {
-        const normalized: StockItem[] = (stockData ?? []).map((row: any) => {
-          const prodArray = row.product;
-          const product = Array.isArray(prodArray) ? prodArray[0] : prodArray;
-
-          return {
-            id: row.id,
-            place: row.place,
-            quantity: row.quantity,
-            unit: row.unit,
-            expiration_date: row.expiration_date,
-            expiration_type: (row.expiration_type as ExpirationType) ?? 'dlc',
-            is_open: !!row.is_open,
-            product: product
-              ? {
-                  id: product.id,
-                  name: product.name,
-                  generic_name: product.generic_name ?? null,
-                  brand: product.brand,
-                  category: product.category,
-                  sub_category: product.sub_category ?? null,
-                  default_unit: product.default_unit,
-                  barcode: product.barcode ?? null,
-                  shopping_hidden: !!product.shopping_hidden,
-                  is_main: !!product.is_main,
-                  kcal_100g: product.kcal_100g, 
-                  kcal_serving: product.kcal_serving, 
-                  serving_size_g: product.serving_size_g, 
-                  grams_per_unit_g: product.grams_per_unit_g,
-                  density_g_ml: product.density_g_ml,
-                }
-              : null,
-          };
-        });
+	      if (stockError) {
+	        console.error(stockError);
+          setStocks([]);
+	      } else {
+        const normalized: StockItem[] = ((stockData ?? []) as StockRow[]).map(normalizeStockRow);
 
         setStocks(normalized);
       }
@@ -1288,27 +1678,11 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         .from('products')
         .select(`id,name,generic_name,brand,category,sub_category,default_unit,barcode,shopping_hidden,is_main,kcal_100g, kcal_serving, serving_size_g, grams_per_unit_g, density_g_ml`);
 
-      if (productsError) {
-        console.error(productsError);
-        if (!stockError) setError('Impossible de charger les produits');
-      } else {
-        const normalizedProducts: Product[] = (productsData ?? []).map((p: any) => ({
-          id: p.id,
-          name: p.name,
-          generic_name: p.generic_name ?? null,
-          brand: p.brand,
-          category: p.category,
-          sub_category: p.sub_category ?? null,
-          default_unit: p.default_unit,
-          barcode: p.barcode ?? null,
-          shopping_hidden: !!p.shopping_hidden,
-          is_main: !!p.is_main,
-          kcal_100g: p.kcal_100g, 
-          kcal_serving: p.kcal_serving, 
-          serving_size_g: p.serving_size_g, 
-          grams_per_unit_g: p.grams_per_unit_g,
-          density_g_ml: p.density_g_ml,
-        }));
+	      if (productsError) {
+	        console.error(productsError);
+          setProducts([]);
+	      } else {
+        const normalizedProducts: Product[] = ((productsData ?? []) as ProductRow[]).map(normalizeProductRow);
         setProducts(normalizedProducts);
       }
 
@@ -1335,26 +1709,26 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
       `)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error(error);
-      setError('Impossible de charger les recettes.');
-      setRecipesLoading(false);
-      return;
-    }
+	    if (error) {
+	      console.error(error);
+        setDbRecipes([]);
+	      setRecipesLoading(false);
+	      return;
+	    }
 
-    const normalized: Recipe[] = (data ?? []).map((r: any) => {
-      const ingredients: RecipeIngredient[] = (r.recipe_ingredients ?? [])
-        .sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
-        .map((x: any) => ({
-          name: String(x.ingredient),
+    const normalized: Recipe[] = ((data ?? []) as RecipeRow[]).map((r) => {
+      const ingredients: RecipeIngredient[] = [...(r.recipe_ingredients ?? [])]
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        .map((x) => ({
+          name: String(x.ingredient ?? ''),
           amount: x.amount ?? null,
-          unit: (x.unit as IngredientUnit) ?? null,
+          unit: toIngredientUnit(x.unit),
         }));
 
       return {
         id: r.id,
         name: r.name,
-        kind: r.kind as RecipeKind,
+        kind: toRecipeKind(r.kind) ?? 'savory',
         ingredients,
         servings: r.servings ?? null,
       };
@@ -1368,12 +1742,108 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
     void fetchRecipes();
   }, []);
 
+  const fetchImageAssets = async () => {
+    const { data, error: imageAssetsError } = await supabase
+      .from('image_assets')
+      .select('kind, image_key, path, public_url');
+
+    if (imageAssetsError) {
+      console.error(imageAssetsError);
+      return;
+    }
+
+    const nextAppImages: AppImages = { ...DEFAULT_APP_IMAGES };
+    const nextRecipeImages: Record<string, string> = {};
+
+    ((data ?? []) as ImageAssetRow[]).forEach((asset) => {
+      const publicUrl = asset.path
+        ? mediaPublicUrl(asset.path)
+        : sanitizeImageUrl(asset.public_url ?? '');
+      if (!publicUrl) return;
+
+      if (asset.kind === 'app' && isAppImageKey(asset.image_key)) {
+        nextAppImages[asset.image_key] = publicUrl;
+      }
+
+      if (asset.kind === 'recipe' && asset.image_key) {
+        nextRecipeImages[asset.image_key] = publicUrl;
+      }
+    });
+
+    setAppImages(nextAppImages);
+    setRecipeImages(nextRecipeImages);
+  };
+
+  const fetchRecipeOverrides = async () => {
+    const { data, error: overridesError } = await supabase
+      .from('recipe_overrides')
+      .select('recipe_id, name, kind, ingredients, servings');
+
+    if (overridesError) {
+      console.error(overridesError);
+      return;
+    }
+
+    const overrides = ((data ?? []) as RecipeOverrideRow[])
+      .map(normalizeRecipeOverrideRow)
+      .filter((entry): entry is [string, RecipeOverride] => entry !== null);
+
+    setRecipeOverrides(Object.fromEntries(overrides));
+  };
+
+  useEffect(() => {
+    void fetchImageAssets();
+    void fetchRecipeOverrides();
+  }, []);
+
+  const applyRecipeOverrides = (recipe: Recipe): Recipe => {
+    const override = recipeOverrides[recipe.id];
+    if (!override) return recipe;
+
+    return {
+      ...recipe,
+      name: override.name,
+      kind: override.kind,
+      ingredients: override.ingredients,
+      servings: override.servings,
+    };
+  };
+
+  const saveRecipeOverride = async (recipeId: string, override: RecipeOverride) => {
+    const { error: overrideError } = await supabase
+      .from('recipe_overrides')
+      .upsert(
+        {
+          recipe_id: recipeId,
+          name: override.name,
+          kind: override.kind,
+          ingredients: override.ingredients,
+          servings: override.servings,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'recipe_id' },
+      );
+
+    if (overrideError) throw overrideError;
+
+    setRecipeOverrides((prev) => ({
+      ...prev,
+      [recipeId]: override,
+    }));
+  };
+
   const createRecipeInDb = async () => {
     const recipeName = newRecipeName.trim();
-    if (!recipeName) return;
+    if (!recipeName) {
+      setError('Donne un nom à la recette.');
+      return;
+    }
 
     const ingredients = parseRecipeIngredients(newRecipeIngredients);
-    if (ingredients.length === 0) return;
+    if (ingredients.length === 0) {
+      setError('Ajoute au moins un ingrédient.');
+      return;
+    }
 
     setError(null);
 
@@ -1412,15 +1882,28 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
 
     // 3) refresh list
     setDbRecipes((prev) => [{
-      id: recipeRow.id,
-      name: recipeRow.name,
-      kind: recipeRow.kind,
-      ingredients,
-      servings: recipeRow.servings ?? null,
-    }, ...prev]);
+	      id: recipeRow.id,
+	      name: recipeRow.name,
+	      kind: toRecipeKind(recipeRow.kind) ?? newRecipeKind,
+	      ingredients,
+	      servings: recipeRow.servings ?? null,
+	    }, ...prev]);
+
+    if (newRecipeImageFile) {
+      try {
+        await uploadImageAsset('recipe', recipeRow.id, newRecipeImageFile);
+      } catch (imageError) {
+        console.error(imageError);
+        setError('Recette créée, mais la photo n’a pas pu être envoyée.');
+        return;
+      }
+    }
+
     setNewRecipeName('');
     setNewRecipeServings('1');
     setNewRecipeIngredients('');
+    setNewRecipeImageSelection(null);
+    setNewRecipeOpen(false);
   };
 
   const openEditRecipe = (recipe: Recipe) => {
@@ -1429,6 +1912,7 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
     setEditRecipeKind(recipe.kind);
     setEditRecipeServings(String(recipe.servings ?? 1));
     setEditRecipeIngredients(recipe.ingredients.map(formatRecipeIngredient).join(', '));
+    setEditRecipeImageSelection(null);
     setEditRecipeOpen(true);
   };
 
@@ -1451,6 +1935,31 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
     }
 
     setError(null);
+
+    const isDbRecipe = dbRecipes.some((recipe) => recipe.id === editRecipeTarget.id);
+    const localOverride: RecipeOverride = {
+      name: recipeName,
+      kind: editRecipeKind,
+      servings,
+      ingredients,
+    };
+
+    if (!isDbRecipe) {
+      try {
+        await saveRecipeOverride(editRecipeTarget.id, localOverride);
+        if (editRecipeImageFile) await uploadImageAsset('recipe', editRecipeTarget.id, editRecipeImageFile);
+      } catch (saveError) {
+        console.error(saveError);
+        setError("Impossible d'enregistrer cette recette dans Supabase.");
+        return;
+      }
+
+      setInfo('Recette personnalisée dans Supabase.');
+      setEditRecipeImageSelection(null);
+      setEditRecipeOpen(false);
+      setEditRecipeTarget(null);
+      return;
+    }
 
     const { error: recipeError } = await supabase
       .from('recipes')
@@ -1501,14 +2010,24 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
         recipe.id === editRecipeTarget.id
           ? {
               ...recipe,
-              name: recipeName,
-              kind: editRecipeKind,
-              servings,
-              ingredients,
+              ...localOverride,
             }
           : recipe,
       ),
     );
+
+    if (editRecipeImageFile) {
+      try {
+        await uploadImageAsset('recipe', editRecipeTarget.id, editRecipeImageFile);
+      } catch (imageError) {
+        console.error(imageError);
+        setError('Recette mise à jour, mais la photo n’a pas pu être envoyée.');
+        return;
+      }
+    }
+
+    setInfo('Recette mise à jour.');
+    setEditRecipeImageSelection(null);
 
     setEditRecipeOpen(false);
     setEditRecipeTarget(null);
@@ -1526,6 +2045,16 @@ const markWeekMealConsumed = async (meal: WeekMeal) => {
     }
 
     setDbRecipes((prev) => prev.filter((r) => r.id !== recipeId));
+    try {
+      await resetImageAsset('recipe', recipeId);
+    } catch (imageError) {
+      console.error(imageError);
+    }
+    setRecipeOverrides((prev) => {
+      const next = { ...prev };
+      delete next[recipeId];
+      return next;
+    });
   };
 
   // ---------- Toggle main ----------
@@ -1635,7 +2164,7 @@ const resetAddForm = () => {
 
   try {
     // 1) find/create product by selected product or barcode
-      let productRow: any | null = null;
+      let productRow: ProductRow | null = null;
       const trimmedBarcode = barcode.trim();
 
       if (addExistingProductId) {
@@ -1646,7 +2175,7 @@ const resetAddForm = () => {
           .maybeSingle();
 
         if (existingProductByIdError) throw existingProductByIdError;
-        if (existingProductById) productRow = existingProductById;
+        if (existingProductById) productRow = existingProductById as ProductRow;
       }
 
       if (!productRow && trimmedBarcode) {
@@ -1657,7 +2186,7 @@ const resetAddForm = () => {
         .limit(1);
 
       if (existingProductError) throw existingProductError;
-      if (existingProducts && existingProducts.length > 0) productRow = existingProducts[0];
+      if (existingProducts && existingProducts.length > 0) productRow = existingProducts[0] as ProductRow;
     }
 
     if (!productRow) {
@@ -1683,26 +2212,10 @@ const resetAddForm = () => {
         .single();
 
       if (productError || !productData) throw productError || new Error('Erreur création produit');
-      productRow = productData;
+      productRow = productData as ProductRow;
     }
 
-    const normalizedProduct: Product = {
-      id: productRow.id,
-      name: productRow.name,
-      generic_name: productRow.generic_name ?? null,
-      brand: productRow.brand,
-      category: productRow.category,
-      sub_category: productRow.sub_category ?? null,
-      default_unit: productRow.default_unit,
-      barcode: productRow.barcode ?? null,
-      shopping_hidden: !!productRow.shopping_hidden,
-      is_main: !!productRow.is_main,
-      kcal_100g: productRow.kcal_100g, 
-      kcal_serving: productRow.kcal_serving, 
-      serving_size_g: productRow.serving_size_g, 
-      grams_per_unit_g: productRow.grams_per_unit_g,
-      density_g_ml: productRow.density_g_ml,
-    };
+    const normalizedProduct = normalizeProductRow(productRow);
 
     setProducts((prev) => {
       const idx = prev.findIndex((p) => p.id === normalizedProduct.id);
@@ -1741,7 +2254,7 @@ const resetAddForm = () => {
 
     const existing = existingStocks && existingStocks[0];
 
-    let finalStockRow: any;
+    let finalStockRow: StockRow;
 
     if (existing) {
       const newQuantity = (existing.quantity ?? 0) + qtyToAdd;
@@ -1761,7 +2274,7 @@ const resetAddForm = () => {
         .single();
 
       if (updateError || !updatedStock) throw updateError || new Error('Erreur mise à jour stock');
-      finalStockRow = updatedStock;
+      finalStockRow = updatedStock as StockRow;
     } else {
       const { data: stockData, error: stockError } = await supabase
         .from('stocks')
@@ -1785,41 +2298,10 @@ const resetAddForm = () => {
         .single();
 
       if (stockError || !stockData) throw stockError || new Error('Erreur création stock');
-      finalStockRow = stockData;
+      finalStockRow = stockData as StockRow;
     }
 
-    const prodArray = (finalStockRow as any).product;
-    const product = Array.isArray(prodArray) ? prodArray[0] : prodArray;
-
-    const newItem: StockItem = {
-      id: finalStockRow.id,
-      place: finalStockRow.place,
-      quantity: finalStockRow.quantity,
-      unit: finalStockRow.unit,
-      expiration_date: finalStockRow.expiration_date,
-      expiration_type: (finalStockRow.expiration_type as ExpirationType) ?? 'dlc',
-      is_open: !!finalStockRow.is_open,
-      product: product
-      ? {
-          id: product.id,
-          name: product.name,
-          generic_name: product.generic_name ?? null,
-          brand: product.brand,
-          category: product.category,
-          sub_category: product.sub_category ?? null,
-          default_unit: product.default_unit,
-          barcode: product.barcode ?? null,
-          shopping_hidden: !!product.shopping_hidden,
-          is_main: !!product.is_main,
-
-          kcal_100g: product.kcal_100g ?? null,
-          kcal_serving: product.kcal_serving ?? null,
-          serving_size_g: product.serving_size_g ?? null,
-          grams_per_unit_g: product.grams_per_unit_g ?? null,
-          density_g_ml: product.density_g_ml ?? null,
-        }
-      : null,
-    };
+    const newItem: StockItem = normalizeStockRow(finalStockRow);
 
     setStocks((prev) => {
       const index = prev.findIndex((s) => s.id === newItem.id);
@@ -1840,8 +2322,8 @@ const resetAddForm = () => {
 
     setInfo(
       addedFromShoppingProductId
-        ? '✅ Produit ajouté au stock. La liste de courses se mettra à jour selon la quantité restante.'
-        : '✅ Produit ajouté au stock.',
+        ? 'Produit ajouté au stock. La liste de courses se mettra à jour selon la quantité restante.'
+        : 'Produit ajouté au stock.',
     );
 
     setShowBackToShoppingAfterAdd(!!addedFromShoppingProductId);
@@ -1950,8 +2432,8 @@ const getShoppingKeywordFromIngredient = (ingredient: string) => {
 
       setInfo(
         createdCount === 0
-          ? '✅ Ingrédients déjà présents dans tes produits connus. Va voir ta liste de courses.'
-          : `✅ Ajouté ${createdCount} ingrédient(s) à ta liste de courses.`,
+          ? 'Ingrédients déjà présents dans tes produits connus. Va voir ta liste de courses.'
+          : `Ajouté ${pluralize(createdCount, 'ingrédient')} à ta liste de courses.`,
       );
     } catch (e) {
       console.error(e);
@@ -2188,6 +2670,15 @@ const changeUnit = async (item: StockItem, newUnit: string) => {
 
 const renderHistoryTab = () => {
   const categorizedHistoryIds = new Set<string>();
+  const historyPlaces = new Set(outOfStock.map((item) => item.place).filter(Boolean));
+  const historyCategories = new Set(outOfStock.map((item) => item.product?.category).filter(Boolean));
+  const lastKnownProduct = outOfStock[0]?.product?.name ?? 'Aucun produit';
+  const historyStats = [
+    { value: outOfStock.length, label: 'produits connus' },
+    { value: historyPlaces.size, label: 'lieux' },
+    { value: historyCategories.size, label: 'catégories' },
+    { value: lastKnownProduct, label: 'dernier achat' },
+  ];
 
   const groupedByCategory: { label: string; items: StockItem[] }[] = MAIN_CATEGORIES.map((cat) => {
     const items = outOfStock.filter((s) => s.product?.category === cat);
@@ -2208,83 +2699,113 @@ const renderHistoryTab = () => {
     });
   }
 
+  const renderHistoryItem = (item: StockItem) => (
+    <article key={item.id} className="history-product-card">
+      <div className="history-product-main">
+        <span className="history-product-category">{item.product?.category ?? 'Sans catégorie'}</span>
+        <h3>{item.product?.name ?? 'Produit'}</h3>
+        <p>{item.product?.brand || item.product?.generic_name || 'Ancien achat enregistré'}</p>
+      </div>
+
+      <div className="history-product-meta">
+        <span>{item.place || settings.defaultPlace}</span>
+        <span>{item.product?.barcode ? `Code ${item.product.barcode}` : 'Sans code-barres'}</span>
+      </div>
+
+      <div className="history-product-controls">
+        <div className="qty-controls">
+          <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, -1)}>−</button>
+          <span className="qty-value">{item.quantity ?? 0}</span>
+          <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, +1)}>+</button>
+        </div>
+        <select
+          className="unit-select"
+          value={item.unit ?? 'unité'}
+          onChange={(e) => void changeUnit(item, e.target.value)}
+        >
+          {UNIT_OPTIONS.map((u) => (
+            <option key={u.value} value={u.value}>{u.label}</option>
+          ))}
+        </select>
+        <button type="button" className="btn-tertiary btn-with-icon" onClick={() => openEdit(item)}>
+          <span className="btn-symbol btn-symbol--edit" aria-hidden="true" />
+          Modifier
+        </button>
+      </div>
+    </article>
+  );
+
   return (
     <>
       <div className="main-header">
         <div>
-          <h1 className="main-title">Anciens achats</h1>
+          <h1 className="main-title">Historique</h1>
           <p className="main-subtitle">
-            Produits tombés à 0. Augmente la quantité pour les remettre au placard.
+            Les produits déjà connus que tu peux remettre au stock rapidement.
           </p>
         </div>
         <div className="main-header-right">
-          <span className="tag">Historique</span>
+          <button type="button" className="btn-tertiary" onClick={() => setActiveTab('stock')}>
+            Retour au stock
+          </button>
+          <span className="tag">Achats passés</span>
         </div>
       </div>
 
-      <section className="category-grid">
-        {groupedByCategory.map(({ label, items }) => (
-          <section key={label} className="card">
-            <div className="category-head">
-              <h2 className="section-title" style={{ margin: 0 }}>{label}</h2>
-              <span className="category-count">{items.length}</span>
-            </div>
-
-            {items.length === 0 ? (
-              <p className="muted" style={{ marginTop: '0.5rem' }}>Aucun élément.</p>
-            ) : (
-              <div className="table-wrapper" style={{ maxHeight: 360 }}>
-                <table className="stock-table">
-                  <thead>
-                    <tr>
-                      <th>Produit</th>
-                      <th>Lieu</th>
-                      <th>Quantité</th>
-                      <th>Unité</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.product?.name ?? 'Produit'}</td>
-                        <td>{item.place || '-'}</td>
-
-                        <td>
-                          <div className="qty-controls">
-                            <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, -1)}>−</button>
-                            <span className="qty-value">{item.quantity ?? 0}</span>
-                            <button type="button" className="qty-btn" onClick={() => void changeQuantity(item, +1)}>+</button>
-                          </div>
-                        </td>
-
-                        <td>
-                          <select
-                            className="unit-select"
-                            value={item.unit ?? 'unité'}
-                            onChange={(e) => void changeUnit(item, e.target.value)}
-                          >
-                            {UNIT_OPTIONS.map((u) => (
-                              <option key={u.value} value={u.value}>{u.label}</option>
-                            ))}
-                          </select>
-                        </td>
-
-                        <td>
-                          <button type="button" className="btn-tertiary" onClick={() => openEdit(item)}>✏️</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        ))}
+      <section className="history-hero">
+        <div className="history-hero-media" aria-hidden="true" />
+        <div className="history-hero-content">
+          <span className="hero-eyebrow">Mémoire du placard</span>
+          <h2>{pluralize(outOfStock.length, 'produit à remettre', 'produits à remettre')}</h2>
+          <p>
+            Reprends un ancien achat sans recréer sa fiche, puis ajuste simplement quantité, unité et lieu.
+          </p>
+        </div>
+        <div className="history-hero-stats">
+          {historyStats.map((stat) => (
+            <span key={stat.label}>
+              <strong>{stat.value}</strong>
+              {stat.label}
+            </span>
+          ))}
+        </div>
       </section>
+
+      {outOfStock.length === 0 ? (
+        <section className="history-empty-state">
+          <div className="history-empty-visual" aria-hidden="true" />
+          <div>
+            <span className="hero-eyebrow">Historique calme</span>
+            <h2>Aucun ancien achat</h2>
+            <p>Les produits qui tombent à zéro apparaîtront ici pour être remis au stock plus vite.</p>
+            <button type="button" className="btn-primary" onClick={() => setActiveTab('stock')}>
+              Voir le stock
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section className="history-board">
+          {groupedByCategory.map(({ label, items }) => (
+            <section key={label} className="history-category-section">
+              <div className="category-head">
+                <h2 className="section-title" style={{ margin: 0 }}>{label}</h2>
+                <span className="category-count">{items.length}</span>
+              </div>
+
+              {items.length === 0 ? (
+                <p className="muted" style={{ marginTop: '0.5rem' }}>Aucun élément.</p>
+              ) : (
+                <div className="history-card-grid">
+                  {items.map(renderHistoryItem)}
+                </div>
+              )}
+            </section>
+          ))}
+        </section>
+      )}
     </>
-  );
-};
+      );
+	    };
 
 const getRecipePlanValue = (recipe: Recipe) => {
   const isDbRecipe = dbRecipes.some((r) => r.id === recipe.id);
@@ -2312,7 +2833,9 @@ const renderWeekMenuTab = () => {
   const dayKeys = days.map(toDateKey);
 
   // recettes disponibles : DB + exemples
-  const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
+  const dbRecipeOptions = dbRecipes.map(applyRecipeOverrides);
+  const sampleRecipeOptions = SAMPLE_RECIPES.map(applyRecipeOverrides);
+  const allRecipes: Recipe[] = [...dbRecipeOptions, ...sampleRecipeOptions];
 
   const getCell = (dateKey: string, slot: MealSlot) =>
     weekMeals.find((m) => m.meal_date === dateKey && m.meal_slot === slot) ?? null;
@@ -2402,8 +2925,8 @@ const renderWeekMenuTab = () => {
     setPlanOpen(false);
   };
 
-  // bonus : ajouter ingrédients manquants de la semaine à la liste
-  const addWeekMissingToShopping = async () => {
+	  // bonus : ajouter ingrédients manquants de la semaine à la liste
+	  const addWeekMissingToShopping = async () => {
     // stock dispo (noms)
     const normalize = (s: string) =>
       s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -2434,117 +2957,213 @@ const renderWeekMenuTab = () => {
     const b = Array.from(missingSweet);
 
     if (a.length === 0 && b.length === 0) {
-      setInfo("✅ Aucun ingrédient manquant détecté pour la semaine.");
+      setInfo("Aucun ingrédient manquant détecté pour la semaine.");
       setActiveTab('shopping');
       return;
     }
 
     // on réutilise ta logique existante
-    if (a.length > 0) await addMissingIngredientsToShopping(a, 'savory');
-    if (b.length > 0) await addMissingIngredientsToShopping(b, 'sweet');
-  };
+	    if (a.length > 0) await addMissingIngredientsToShopping(a, 'savory');
+	    if (b.length > 0) await addMissingIngredientsToShopping(b, 'sweet');
+	  };
 
-  return (
-    <>
-      <div className="main-header">
-        <div>
-          <h1 className="main-title">Menu de la semaine</h1>
-          <p className="main-subtitle">
-            Planifie tes repas du lundi au dimanche (petit-déj / déjeuner / dîner).
+  const mealsThisWeek = weekMeals.filter((meal) => dayKeys.includes(meal.meal_date));
+  const consumedWeekMeals = mealsThisWeek.filter((meal) => meal.consumed_at).length;
+  const estimatedWeekCalories = mealsThisWeek.reduce((total, meal) => {
+    const kcal = mealCalories(meal, dbRecipes, products);
+    return total + (kcal ?? 0);
+  }, 0);
+  const freeWeekSlots = Math.max(0, (dayKeys.length * MEAL_SLOTS.length) - mealsThisWeek.length);
+  const completedWeekPercent = mealsThisWeek.length > 0
+    ? Math.round((consumedWeekMeals / mealsThisWeek.length) * 100)
+    : 0;
+  const averageMealCalories = mealsThisWeek.length > 0 && estimatedWeekCalories > 0
+    ? Math.round(estimatedWeekCalories / mealsThisWeek.length)
+    : 0;
+  const weekRangeLabel = `${days[0].toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })} - ${days[6].toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}`;
+  const planningHeroStats = [
+    { value: mealsThisWeek.length, label: 'repas' },
+    { value: consumedWeekMeals, label: 'validés' },
+    { value: freeWeekSlots, label: 'créneaux libres' },
+    { value: averageMealCalories || '-', label: 'kcal moy.' },
+  ];
+  const getDayMealEntries = (dateKey: string) =>
+    MEAL_SLOTS.map((slot) => ({ slot, meal: getCell(dateKey, slot.key) }));
+  const nextPlannedEntry = days
+    .flatMap((day) => {
+      const dateKey = toDateKey(day);
+      return getDayMealEntries(dateKey).map(({ slot, meal }) => ({ day, dateKey, slot, meal }));
+    })
+    .find(({ dateKey, meal }) => meal && !meal.consumed_at && dateKey >= todayKey);
+  const nextPlannedText = nextPlannedEntry?.meal
+    ? `${nextPlannedEntry.slot.label} · ${nextPlannedEntry.meal.recipe_name}`
+    : 'Aucun repas à venir';
+
+	  return (
+	    <>
+	      <div className="main-header">
+	        <div>
+	          <h1 className="main-title">Planning</h1>
+	          <p className="main-subtitle">
+	            Ta semaine de repas, prête à devenir une liste de courses.
+	          </p>
+	        </div>
+	        <div className="main-header-right">
+	          <span className="tag">Semaine</span>
+	        </div>
+	      </div>
+
+      <section
+        className="planner-band"
+        style={{ '--planner-progress': `${completedWeekPercent}%` } as CSSProperties}
+      >
+        <div className="planner-band-media" aria-hidden="true" />
+        <div className="planner-band-content">
+          <span className="hero-eyebrow">Menu de la semaine</span>
+          <h2>{pluralize(mealsThisWeek.length, 'repas planifié', 'repas planifiés')}</h2>
+          <p>
+            {weekRangeLabel} · {pluralize(consumedWeekMeals, 'repas validé', 'repas validés')} · {pluralize(freeWeekSlots, 'créneau libre', 'créneaux libres')}
           </p>
+          <div className="planner-next-meal">
+            <span>Prochain repas</span>
+            <strong>{nextPlannedText}</strong>
+          </div>
+          <div className="planner-progress" aria-hidden="true">
+            <span />
+          </div>
         </div>
-        <div className="main-header-right">
-          <span className="tag">Planning</span>
-        </div>
-      </div>
+        <div className="planner-band-side">
+          <div className="planner-band-stats">
+            {planningHeroStats.map((stat) => (
+              <span key={stat.label}>
+                <strong>{stat.value}</strong>
+                {stat.label}
+              </span>
+            ))}
+          </div>
+	          <button type="button" className="btn-primary btn-with-icon" onClick={() => openPlan(dayKeys[0], 'lunch')}>
+	            <span className="btn-symbol btn-symbol--calendar" aria-hidden="true" />
+	            Composer un repas
+	          </button>
+	        </div>
+      </section>
 
-      <section className="card">
-        <div className="week-controls">
-          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, -7))}>
-            ← Semaine précédente
-          </button>
-          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(startOfWeekMonday(new Date()))}>
-            Cette semaine
-          </button>
-          <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, 7))}>
-            Semaine suivante →
-          </button>
-
-          <div style={{ flex: 1 }} />
-
-          <button type="button" className="btn-secondary" onClick={() => void addWeekMissingToShopping()}>
-            🛒 Ajouter ingrédients manquants
-          </button>
+      <section className="planning-board">
+        <div className="planning-toolbar">
+          <div>
+            <span className="planning-toolbar-label">Semaine affichée</span>
+            <strong>{weekRangeLabel}</strong>
+          </div>
+          <div className="planning-toolbar-actions">
+            <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, -7))}>
+              Précédente
+            </button>
+            <button type="button" className="btn-tertiary" onClick={() => setWeekStart(startOfWeekMonday(new Date()))}>
+              Aujourd'hui
+            </button>
+            <button type="button" className="btn-tertiary" onClick={() => setWeekStart(addDays(weekStart, 7))}>
+              Suivante
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => void addWeekMissingToShopping()}>
+              Manquants aux courses
+            </button>
+          </div>
         </div>
 
         {weekMealsLoading ? (
-          <p className="muted" style={{ marginTop: '0.6rem' }}>Chargement…</p>
+          <div className="planning-loading-state">
+            <span className="hero-eyebrow">Chargement</span>
+            <h3>Préparation de ta semaine</h3>
+            <p>Les repas enregistrés arrivent dans le planning.</p>
+          </div>
         ) : (
-          <div className="week-grid">
-            <div className="week-row week-row--head">
-              <div className="week-cell week-cell--head">Repas</div>
-              {days.map((d) => (
-                <div key={toDateKey(d)} className="week-cell week-cell--head">
-                  {d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: '2-digit' })}
-                </div>
-              ))}
-            </div>
-            {MEAL_SLOTS.map((slot) => (
-              <div key={slot.key} className="week-row">
-                <div className="week-cell week-cell--slot">{slot.label}</div>
+          <div className="planning-week-grid">
+            {days.map((day) => {
+              const dateKey = toDateKey(day);
+              const dayEntries = getDayMealEntries(dateKey);
+              const plannedDayMeals = dayEntries.filter(({ meal }) => meal).length;
+              const consumedDayMeals = dayEntries.filter(({ meal }) => meal?.consumed_at).length;
+              const isToday = dateKey === todayKey;
 
-                {dayKeys.map((dk) => {
-                  const cell = getCell(dk, slot.key);
-
-                  return (
-                    <div key={`${dk}-${slot.key}`} className="week-cell">
-                      {!cell ? (
-                        <button
-                          type="button"
-                          className="week-add"
-                          onClick={() => openPlan(dk, slot.key)}
-                        >
-                          + Ajouter
-                        </button>
-                      ) : (
-                        <div className="meal-mini">
-                          <div className="meal-mini-title">{cell.recipe_name}</div>
-                          {(() => {
-                            const calories = mealCaloriesInfo(cell, dbRecipes, products);
-                            return (
-                              <div className="meal-mini-meta">
-                                {calories.kcal != null
-                                  ? `🔥 ${calories.approx ? '≈ ' : ''}${calories.kcal} kcal`
-                                  : 'Calories à compléter'}
-                              </div>
-                            );
-                          })()}
-                          <div className="meal-mini-meta">
-                            {cell.servings ? `${cell.servings} pers.` : ''}
-                            {cell.notes ? ` · ${cell.notes}` : ''}
-                          </div>
-                          <div className="meal-mini-actions">
-                            {cell.consumed_at ? (
-                              <span className="meal-consumed">Validé</span>
-                            ) : (
-                              <button type="button" className="btn-tertiary" onClick={() => void markWeekMealConsumed(cell)}>
-                                Valider
-                              </button>
-                            )}
-                            <button type="button" className="btn-tertiary" onClick={() => openPlan(dk, slot.key)}>
-                              ✏️
-                            </button>
-                            <button type="button" className="btn-tertiary" onClick={() => void deleteWeekMeal(dk, slot.key)}>
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-                      )}
+              return (
+                <article
+                  key={dateKey}
+                  className={`planning-day-card${isToday ? ' planning-day-card--today' : ''}`}
+                >
+                  <div className="planning-day-head">
+                    <div>
+                      <span>{day.toLocaleDateString('fr-FR', { weekday: 'long' })}</span>
+                      <strong>{day.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long' })}</strong>
                     </div>
-                  );
-                })}
-              </div>
-            ))}
+                    <small>{isToday ? "Aujourd'hui" : `${plannedDayMeals}/3`}</small>
+                  </div>
+
+                  <div className="planning-day-summary">
+                    <span>{pluralize(plannedDayMeals, 'repas prévu', 'repas prévus')}</span>
+                    <span>{pluralize(consumedDayMeals, 'validé', 'validés')}</span>
+                  </div>
+
+                  <div className="planning-meal-stack">
+                    {dayEntries.map(({ slot, meal }) => {
+                      const calories = meal ? mealCaloriesInfo(meal, dbRecipes, products) : null;
+                      const recipeKindLabel = meal?.recipe_kind === 'sweet' ? 'Sucré' : meal?.recipe_kind === 'savory' ? 'Salé' : 'Libre';
+
+                      return (
+                        <article
+                          key={`${dateKey}-${slot.key}`}
+                          className={`planning-meal-card${meal ? '' : ' planning-meal-card--empty'}${meal?.consumed_at ? ' planning-meal-card--consumed' : ''}`}
+                        >
+                          <div className="planning-meal-slot">
+                            <span>{slot.label}</span>
+                            {meal && <small>{recipeKindLabel}</small>}
+                          </div>
+
+                          {!meal ? (
+                            <button
+                              type="button"
+                              className="planning-add-meal"
+                              onClick={() => openPlan(dateKey, slot.key)}
+                            >
+                              Planifier
+                            </button>
+                          ) : (
+                            <>
+                              <div className="planning-meal-body">
+                                <h3>{meal.recipe_name}</h3>
+                                <div className="planning-meal-meta">
+                                  <span>
+                                    {calories?.kcal != null
+                                      ? `${calories.approx ? '≈ ' : ''}${calories.kcal} kcal`
+                                      : 'Kcal à compléter'}
+                                  </span>
+                                  {meal.servings && <span>{meal.servings} pers.</span>}
+                                </div>
+                                {meal.notes && <p>{meal.notes}</p>}
+                              </div>
+                              <div className="planning-meal-actions">
+                                {meal.consumed_at ? (
+                                  <span className="meal-consumed">Validé</span>
+                                ) : (
+                                  <button type="button" className="btn-tertiary" onClick={() => void markWeekMealConsumed(meal)}>
+                                    Valider
+                                  </button>
+                                )}
+                                <button type="button" className="btn-tertiary" onClick={() => openPlan(dateKey, slot.key)}>
+                                  Modifier
+                                </button>
+                                <button type="button" className="btn-tertiary" onClick={() => void deleteWeekMeal(dateKey, slot.key)}>
+                                  Supprimer
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
 
@@ -2554,15 +3173,34 @@ const renderWeekMenuTab = () => {
       {/* Modal plan */}
       {planOpen && (
         <div className="modal-backdrop">
-          <div className="modal-card">
+          <div className="modal-card planner-modal-card">
             <div className="modal-head">
-              <h3 style={{ margin: 0 }}>
-                Planifier — {planDate} · {MEAL_SLOTS.find((s) => s.key === planSlot)?.label}
-              </h3>
-              <button type="button" className="modal-close" onClick={() => setPlanOpen(false)}>✕</button>
+              <div>
+                <p className="modal-eyebrow">Planning</p>
+                <h3 className="modal-title">Planifier un repas</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Fermer la fenêtre"
+                onClick={() => setPlanOpen(false)}
+              >
+                ✕
+              </button>
             </div>
 
-            <div className="field-group">
+	            <p className="modal-subtitle">
+	              Choisis une recette, ajuste les portions, ou note un repas libre avec ses ingrédients.
+	            </p>
+
+            <div className="modal-context-row">
+              <span>{planDate}</span>
+              <span>{MEAL_SLOTS.find((s) => s.key === planSlot)?.label}</span>
+              <span>{planRecipeValue ? 'Recette sélectionnée' : 'À compléter'}</span>
+            </div>
+
+            <div className="form-grid modal-form-grid">
+              <div className="field-group">
               <label className="field-label">Calories (optionnel)</label>
               <input
                 className="field-input"
@@ -2572,7 +3210,6 @@ const renderWeekMenuTab = () => {
               />
             </div>
 
-            <div className="form-grid" style={{ marginTop: '0.6rem' }}>
               <div className="field-group full">
                 <label className="field-label">Choisir une recette</label>
                 <select
@@ -2584,7 +3221,7 @@ const renderWeekMenuTab = () => {
                   <option value="custom">Repas libre (texte)</option>
 
                   <optgroup label="Recettes enregistrées">
-                    {dbRecipes.map((r) => (
+                    {dbRecipeOptions.map((r) => (
                       <option key={r.id} value={`db:${r.id}`}>
                         {r.name}
                       </option>
@@ -2592,7 +3229,7 @@ const renderWeekMenuTab = () => {
                   </optgroup>
 
                   <optgroup label="Recettes exemples">
-                    {SAMPLE_RECIPES.map((r) => (
+                    {sampleRecipeOptions.map((r) => (
                       <option key={r.id} value={`sample:${r.id}`}>
                         {r.name}
                       </option>
@@ -2672,19 +3309,19 @@ const renderWeekMenuTab = () => {
             </div>
 
             <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => setPlanOpen(false)}>
-                Annuler
-              </button>
-              <button type="button" className="btn-primary" onClick={() => void savePlan()}>
-                Enregistrer
-              </button>
-            </div>
+	              <button type="button" className="btn-secondary" onClick={() => setPlanOpen(false)}>
+	                Annuler
+	              </button>
+	              <button type="button" className="btn-primary" onClick={() => void savePlan()}>
+	                Enregistrer le repas
+	              </button>
+	            </div>
           </div>
         </div>
       )}
     </>
-  );
-};
+      );
+	    };
 
 const hideFromShopping = async (productId: string) => {
   const { error } = await supabase
@@ -2699,12 +3336,26 @@ const hideFromShopping = async (productId: string) => {
   }
 
   setProducts((prev) => prev.map((p) => (p.id === productId ? { ...p, shopping_hidden: true } : p)));
-  setInfo("✅ Aliment retiré de la liste de courses.");
+  setInfo("Aliment retiré de la liste de courses.");
 };
 
   // ---------- Tabs ----------
 const renderStockTab = () => {
   const stockSearchKey = normalizeText(stockSearch);
+
+  const getShelfKind = (placeName: string) => {
+    const key = normalizeText(placeName);
+
+    if (key.includes('frigo') || key.includes('refrigerateur')) return 'fridge';
+    if (key.includes('congel')) return 'freezer';
+
+    return 'pantry';
+  };
+
+  const openAddProductFlow = () => {
+    setActiveTab('dashboard');
+    setScrollToAddForm(true);
+  };
 
   const searchFilteredInStock = stockSearchKey
     ? inStock.filter((item) => {
@@ -2734,6 +3385,23 @@ const renderStockTab = () => {
         .filter((place): place is string => !!place),
     ),
   ).sort((a, b) => a.localeCompare(b));
+
+  const stockShelfCards = (stockPlaces.length > 0 ? stockPlaces : ['Placard', 'Frigo', 'Congélateur']).map((placeName) => {
+    const items = inStock.filter((item) => item.place?.trim() === placeName);
+    const urgentCount = items.filter((item) => {
+      const status = getExpirationStatus(item.expiration_date, settings.soonDays);
+      return status === 'soon' || status === 'expired' || item.is_open;
+    }).length;
+    const lowCount = items.filter((item) => (item.quantity ?? 0) <= stepForUnit(item.unit)).length;
+
+    return {
+      placeName,
+      count: items.length,
+      urgentCount,
+      lowCount,
+      kind: getShelfKind(placeName),
+    };
+  });
 
   const filteredInStock = searchFilteredInStock.filter((item) => {
     const status = getExpirationStatus(item.expiration_date, settings.soonDays);
@@ -2774,6 +3442,25 @@ const renderStockTab = () => {
     { value: 'low', label: 'Stock faible' },
   ];
 
+  const stockOverviewStats = [
+    { value: inStock.length, label: 'produits suivis' },
+    { value: priorityList.length, label: 'à surveiller' },
+    { value: lowStockList.length, label: 'stocks faibles' },
+    { value: stockPlaces.length || stockShelfCards.length, label: 'lieux' },
+  ];
+
+  const stockHeroItem = priorityList[0];
+  const stockHeroTitle = stockHeroItem
+    ? `${stockHeroItem.product?.name ?? 'Un produit'} mérite ton attention`
+    : inStock.length > 0
+      ? 'Tes rayons sont sous contrôle'
+      : 'Construis ton stock en quelques scans';
+  const stockHeroText = stockHeroItem
+    ? `${stockHeroItem.place || 'Lieu non précisé'} · ${stockHeroItem.quantity ?? 0} ${stockHeroItem.unit ?? 'unité'} à prioriser avant le prochain menu.`
+    : inStock.length > 0
+      ? 'Recherche, trie et ajuste les quantités sans passer par une grille froide.'
+      : 'Scanne un code-barres ou ajoute un produit à la main pour remplir tes rayons.';
+
   const hasActiveStockControls =
     stockSearch.trim() ||
     stockFilter !== 'all' ||
@@ -2810,153 +3497,149 @@ const renderStockTab = () => {
     });
   }
 
-  const renderRowsTable = (rows: StockItem[]) => (
-    <div className="table-wrapper" style={{ maxHeight: 360 }}>
-      <table className="stock-table">
-        <thead>
-          <tr>
-            <th>Produit</th>
-            <th>Principal</th>
-            <th>Lieu</th>
-            <th>Quantité</th>
-            <th>Unité</th>
-            <th>Péremption</th>
-            <th>État</th>
-            <th>Statut</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
+  const renderStockCard = (item: StockItem) => {
+    const expDate = item.expiration_date;
+    const exp = expDate ? new Date(expDate).toLocaleDateString() : 'Pas de date';
+    const status = getExpirationStatus(expDate, settings.soonDays);
+    const labelStatus = getExpirationLabel(status, item.expiration_type);
+    const expirationTypeLabel =
+      item.expiration_type === 'dlc'
+        ? 'DLC'
+        : item.expiration_type === 'ddm'
+          ? 'DDM'
+          : 'Date inconnue';
+    const kcalInfo = kcalForStock(item);
+    const isLow = (item.quantity ?? 0) <= stepForUnit(item.unit);
+    const cardTone =
+      status === 'expired'
+        ? ' stock-product-card--expired'
+        : status === 'soon' || item.is_open
+          ? ' stock-product-card--watch'
+          : isLow
+            ? ' stock-product-card--low'
+            : '';
 
-        <tbody>
-          {rows.map((item) => {
-            const expDate = item.expiration_date;
-            const exp = expDate ? new Date(expDate).toLocaleDateString() : '-';
-            const status = getExpirationStatus(expDate, settings.soonDays);
-            const labelStatus = getExpirationLabel(status, item.expiration_type);
-            const expirationTypeLabel =
-              item.expiration_type === 'dlc'
-                ? 'DLC'
-                : item.expiration_type === 'ddm'
-                  ? 'DDM'
-                  : 'Date inconnue';
-            const kcalInfo = kcalForStock(item);
+    return (
+      <article key={item.id} className={`stock-product-card${cardTone}`}>
+        <div className="stock-product-top">
+          <div className="stock-product-identity">
+            <span className="stock-product-category">
+              {item.product?.sub_category || item.product?.category || 'Sans catégorie'}
+            </span>
+            <h3>{item.product?.name ?? 'Produit'}</h3>
+            <p>
+              {item.product?.brand || 'Marque non renseignée'}
+              {item.product?.barcode ? ` · ${item.product.barcode}` : ''}
+            </p>
+          </div>
 
-            return (
-              <tr key={item.id}>
-                <td>
-                  <div className="product-cell">
-                    <span className="product-name">
-                      {item.product?.name ?? 'Produit'}
-                    </span>
+          <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
+            <span className="status-dot" />
+            {labelStatus}
+          </span>
+        </div>
 
-                    {item.product?.brand && (
-                      <span className="product-brand">{item.product.brand}</span>
-                    )}
+        <div className="stock-product-meta-grid">
+          <div>
+            <span>Lieu</span>
+            <strong>{item.place || 'Non rangé'}</strong>
+          </div>
+          <div>
+            <span>Date</span>
+            <strong>{exp}</strong>
+            <small>{expirationTypeLabel}</small>
+          </div>
+          <div>
+            <span>Énergie</span>
+            <strong>
+              {kcalInfo.kcal != null
+                ? `${kcalInfo.approx ? '≈ ' : ''}${kcalInfo.kcal} kcal`
+                : 'À compléter'}
+            </strong>
+          </div>
+        </div>
 
-                    {kcalInfo.kcal != null && (
-                      <span className="product-brand">
-                        🔥 {kcalInfo.approx ? '≈ ' : ''}
-                        {kcalInfo.kcal} kcal restantes
-                      </span>
-                    )}
-                  </div>
-                </td>
+        <div className="stock-product-controls">
+          <div className="stock-quantity-card">
+            <span>Quantité</span>
+            <div className="stock-quantity-line">
+              <div className="qty-controls">
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => void changeQuantity(item, -1)}
+                  title="Diminuer"
+                >
+                  −
+                </button>
 
-                <td>
-                  {item.product ? (
-                    <input
-                      type="checkbox"
-                      checked={item.product.is_main}
-                      onChange={() =>
-                        handleToggleMain(item.product!.id, item.product!.is_main)
-                      }
-                    />
-                  ) : (
-                    '-'
-                  )}
-                </td>
+                <span className="qty-value">{item.quantity ?? 0}</span>
 
-                <td>{item.place || '-'}</td>
+                <button
+                  type="button"
+                  className="qty-btn"
+                  onClick={() => void changeQuantity(item, +1)}
+                  title="Augmenter"
+                >
+                  +
+                </button>
+              </div>
 
-                <td>
-                  <div className="qty-controls">
-                    <button
-                      type="button"
-                      className="qty-btn"
-                      onClick={() => void changeQuantity(item, -1)}
-                      title="Diminuer"
-                    >
-                      −
-                    </button>
+              <select
+                className="unit-select stock-unit-select"
+                value={item.unit ?? 'unité'}
+                onChange={(e) => void changeUnit(item, e.target.value)}
+              >
+                {UNIT_OPTIONS.map((u) => (
+                  <option key={u.value} value={u.value}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
 
-                    <span className="qty-value">{item.quantity ?? 0}</span>
+        <div className="stock-product-footer">
+          {item.product ? (
+            <label className="stock-product-toggle">
+              <input
+                type="checkbox"
+                checked={item.product.is_main}
+                onChange={() => handleToggleMain(item.product!.id, item.product!.is_main)}
+              />
+              <span>Essentiel</span>
+            </label>
+          ) : (
+            <span className="stock-product-toggle stock-product-toggle--muted">Produit lié manquant</span>
+          )}
 
-                    <button
-                      type="button"
-                      className="qty-btn"
-                      onClick={() => void changeQuantity(item, +1)}
-                      title="Augmenter"
-                    >
-                      +
-                    </button>
-                  </div>
-                </td>
+          <button
+            type="button"
+            className={`status-pill status-pill-button ${item.is_open ? 'status-soon' : 'status-ok'}`}
+            onClick={() => void updateStock(item.id, { is_open: !item.is_open })}
+            title={item.is_open ? 'Marquer comme non ouvert' : 'Marquer comme ouvert'}
+          >
+            <span className="status-dot" />
+            {item.is_open ? 'Ouvert' : 'Fermé'}
+          </button>
 
-                <td>
-                  <select
-                    className="unit-select"
-                    value={item.unit ?? 'unité'}
-                    onChange={(e) => void changeUnit(item, e.target.value)}
-                  >
-                    {UNIT_OPTIONS.map((u) => (
-                      <option key={u.value} value={u.value}>
-                        {u.label}
-                      </option>
-                    ))}
-                  </select>
-                </td>
+          <button
+            type="button"
+            className="btn-tertiary stock-edit-btn"
+            onClick={() => openEdit(item)}
+            title="Modifier"
+          >
+            Modifier
+          </button>
+        </div>
+      </article>
+    );
+  };
 
-                <td>
-                  <div className="product-cell">
-                    <span>{exp}</span>
-                    <span className="product-brand">{expirationTypeLabel}</span>
-                  </div>
-                </td>
-
-                <td>
-                  <button
-                    type="button"
-                    className={`status-pill status-pill-button ${item.is_open ? 'status-soon' : 'status-ok'}`}
-                    onClick={() => void updateStock(item.id, { is_open: !item.is_open })}
-                    title={item.is_open ? 'Marquer comme non ouvert' : 'Marquer comme ouvert'}
-                  >
-                    <span className="status-dot" />
-                    {item.is_open ? 'Ouvert' : 'Non ouvert'}
-                  </button>
-                </td>
-
-                <td>
-                  <span className={`status-pill ${getExpirationClass(status, item.expiration_type)}`}>
-                    <span className="status-dot" />
-                    {labelStatus}
-                  </span>
-                </td>
-
-                <td>
-                  <button
-                    type="button"
-                    className="btn-tertiary"
-                    onClick={() => openEdit(item)}
-                    title="Modifier"
-                  >
-                    ✏️
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+  const renderStockCardGrid = (rows: StockItem[]) => (
+    <div className="stock-product-grid">
+      {rows.map(renderStockCard)}
     </div>
   );
 
@@ -2973,8 +3656,7 @@ const renderStockTab = () => {
       ? getSubcatsFor(label as MainCategory)
       : [];
 
-    // pas de sous-catégories => table directe
-    if (subcats.length === 0) return renderRowsTable(items);
+    if (subcats.length === 0) return renderStockCardGrid(items);
 
     // sous-catégories => on n'affiche que celles qui ont au moins 1 produit
     const blocks = subcats
@@ -2985,7 +3667,7 @@ const renderStockTab = () => {
         return (
           <div key={sc} className="subcat-block">
             <h3 className="subcat-title">{sc}</h3>
-            {renderRowsTable(rows)}
+            {renderStockCardGrid(rows)}
           </div>
         );
       })
@@ -2997,7 +3679,7 @@ const renderStockTab = () => {
       blocks.push(
         <div key="Autres" className="subcat-block">
           <h3 className="subcat-title">Autres</h3>
-          {renderRowsTable(others)}
+          {renderStockCardGrid(others)}
         </div>,
       );
     }
@@ -3009,34 +3691,86 @@ const renderStockTab = () => {
     <>
       <div className="main-header">
         <div>
-          <h1 className="main-title">Placards & frigo</h1>
+          <h1 className="main-title">Stock</h1>
           <p className="main-subtitle">
-            Inventaire détaillé rangé par grandes catégories.
+            Tout ce que tu as sous la main, par lieu et par urgence.
           </p>
         </div>
         <div className="main-header-right">
-          <span className="tag">Inventaire</span>
+          <button type="button" className="btn-tertiary" onClick={() => setActiveTab('history')}>
+            Anciens achats
+          </button>
+          <span className="tag">Inventaire vivant</span>
         </div>
       </div>
 
-      <section className="card">
-        <div className="field-group full">
-          <label className="field-label">Rechercher dans le stock</label>
-          <div className="field-row">
-            <input
-              className="field-input"
-              value={stockSearch}
-              onChange={(e) => setStockSearch(e.target.value)}
-              placeholder="Nom, marque, lieu, catégorie..."
-            />
-            {stockSearch && (
-              <button type="button" className="btn-tertiary" onClick={() => setStockSearch('')}>
-                Effacer
-              </button>
-            )}
+      <section className="stock-hero">
+        <div className="stock-hero-media" aria-hidden="true" />
+        <div className="stock-hero-content">
+          <span className="hero-eyebrow">Inventaire</span>
+          <h2>{stockHeroTitle}</h2>
+          <p>{stockHeroText}</p>
+          <div className="hero-actions">
+	            <button type="button" className="btn-primary btn-with-icon" onClick={() => setShowScanner(true)}>
+	              <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	              Scanner un produit
+	            </button>
+            <button type="button" className="btn-secondary btn-with-icon" onClick={openAddProductFlow}>
+              <span className="btn-symbol btn-symbol--plus" aria-hidden="true" />
+              Ajouter au stock
+            </button>
+          </div>
+        </div>
+
+        <div className="stock-hero-stats">
+          {stockOverviewStats.map((stat) => (
+            <div key={stat.label} className="stock-hero-stat">
+              <strong>{stat.value}</strong>
+              <span>{stat.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="stock-shelf-grid" aria-label="Lieux de stockage">
+        {stockShelfCards.map((card) => (
+          <button
+            key={card.placeName}
+            type="button"
+            className={`shelf-card shelf-card--${card.kind}${stockPlaceFilter === card.placeName ? ' shelf-card--active' : ''}`}
+            onClick={() => setStockPlaceFilter(stockPlaceFilter === card.placeName ? '' : card.placeName)}
+          >
+            <span className="shelf-card-visual" aria-hidden="true" />
+            <span className="shelf-card-kicker">
+              {card.kind === 'fridge' ? 'Frais' : card.kind === 'freezer' ? 'Froid' : 'Réserve'}
+            </span>
+            <strong>{card.placeName}</strong>
+            <span>{pluralize(card.count, 'produit')}</span>
+            <span>{pluralize(card.urgentCount, 'alerte')} · {pluralize(card.lowCount, 'stock faible', 'stocks faibles')}</span>
+          </button>
+        ))}
+      </section>
+
+      <section className="card stock-command-card">
+        <div className="stock-command-layout">
+          <div className="field-group stock-command-search">
+            <label className="field-label">Recherche</label>
+            <div className="field-row">
+              <input
+                className="field-input"
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+                placeholder="Produit, marque, lieu, catégorie..."
+              />
+              {stockSearch && (
+                <button type="button" className="btn-tertiary" onClick={() => setStockSearch('')}>
+                  Effacer
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="field-group" style={{ marginTop: '0.6rem' }}>
+          <div className="field-group">
             <label className="field-label">Trier par</label>
             <select
               className="field-input"
@@ -3050,7 +3784,7 @@ const renderStockTab = () => {
             </select>
           </div>
 
-          <div className="field-group" style={{ marginTop: '0.6rem' }}>
+          <div className="field-group">
             <label className="field-label">Sens du tri</label>
             <select
               className="field-input"
@@ -3074,20 +3808,8 @@ const renderStockTab = () => {
             </select>
           </div>
 
-          <div className="subtabs" style={{ marginTop: '0.6rem' }}>
-            {stockFilterOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={'subtab-btn' + (stockFilter === option.value ? ' subtab-btn--active' : '')}
-                onClick={() => setStockFilter(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
           {stockPlaces.length > 0 && (
-            <div className="field-group" style={{ marginTop: '0.6rem' }}>
+            <div className="field-group">
               <label className="field-label">Filtrer par lieu</label>
               <select
                 className="field-input"
@@ -3103,21 +3825,30 @@ const renderStockTab = () => {
               </select>
             </div>
           )}
+        </div>
 
-          {hasActiveStockControls && (
+        <div className="subtabs stock-filter-tabs">
+          {stockFilterOptions.map((option) => (
             <button
+              key={option.value}
               type="button"
-              className="btn-tertiary"
-              style={{ marginTop: '0.6rem' }}
-              onClick={resetStockControls}
+              className={'subtab-btn' + (stockFilter === option.value ? ' subtab-btn--active' : '')}
+              onClick={() => setStockFilter(option.value)}
             >
-              Réinitialiser les filtres
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="stock-command-footer">
+          <p className="muted">
+            {pluralize(sortedInStock.length, 'résultat')} sur {pluralize(inStock.length, 'produit')} en stock.
+          </p>
+          {hasActiveStockControls && (
+            <button type="button" className="btn-tertiary" onClick={resetStockControls}>
+              Réinitialiser
             </button>
           )}
-
-          <p className="muted" style={{ marginTop: '0.4rem' }}>
-            {sortedInStock.length} résultat(s) sur {inStock.length} produit(s) en stock.
-          </p>
         </div>
       </section>
 
@@ -3126,17 +3857,39 @@ const renderStockTab = () => {
           <p>Chargement...</p>
         </section>
       ) : inStock.length === 0 ? (
-        <section className="card">
-          <p className="muted">Aucun produit ne correspond à cette recherche ou ces filtres.</p>
+        <section className="stock-empty-state">
+          <div className="stock-empty-visual" aria-hidden="true" />
+          <div>
+            <span className="hero-eyebrow">Premier rayon</span>
+            <h2>Ton stock va prendre forme ici</h2>
+            <p>
+              Commence par scanner un produit ou ajoute-le à la main. Ensuite VPlacard pourra remplir les rayons,
+              repérer les dates et préparer les courses.
+            </p>
+            <div className="hero-actions">
+	              <button type="button" className="btn-primary btn-with-icon" onClick={() => setShowScanner(true)}>
+	                <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	                Scanner un produit
+	              </button>
+              <button type="button" className="btn-secondary btn-with-icon" onClick={openAddProductFlow}>
+                <span className="btn-symbol btn-symbol--plus" aria-hidden="true" />
+                Ajouter manuellement
+              </button>
+            </div>
+          </div>
         </section>
       ) : filteredInStock.length === 0 ? (
-        <section className="card">
-          <p className="muted">Aucun produit ne correspond à cette recherche ou ce filtre.</p>
+        <section className="card stock-empty-filter">
+          <h2 className="section-title">Aucun produit trouvé</h2>
+          <p className="section-subtitle">Essaie d’élargir la recherche ou de retirer un filtre.</p>
+          <button type="button" className="btn-tertiary" onClick={resetStockControls}>
+            Réinitialiser les filtres
+          </button>
         </section>
       ) : (
         <section className="category-grid">
           {groupedByCategory.filter(({ items }) => items.length > 0).map(({ label, items }) => (
-            <section key={label} className="card">
+            <section key={label} className="stock-category-section">
               <div className="category-head">
                 <h2 className="section-title" style={{ margin: 0 }}>
                   {label}
@@ -3196,39 +3949,99 @@ const renderStockTab = () => {
       setShoppingSearch('');
     };
 
-    const renderDashboard = () => (
+    const renderDashboard = () => {
+      const heroItem = priorityList[0];
+      const plannedMealCount = todayMeals.filter(({ meal }) => meal).length;
+      const nextMeal = todayMeals.find(({ meal }) => meal && !meal.consumed_at)?.meal;
+      const heroTitle = heroItem
+        ? `${heroItem.product?.name ?? 'Un produit'} à sauver en priorité`
+        : nextMeal
+          ? `${nextMeal.recipe_name} est prévu aujourd'hui`
+          : 'Ta cuisine est prête pour la journée';
+      const heroText = heroItem
+        ? `${heroItem.place || 'Lieu non précisé'} · ${heroItem.quantity ?? 0} ${heroItem.unit ?? 'unité'} à utiliser avant de refaire les courses.`
+        : nextMeal
+          ? 'Ton planning a déjà une piste. Tu peux valider le repas après cuisson pour ajuster stock et calories.'
+          : "Ajoute un produit, planifie un repas ou trouve une recette avec ce que tu as déjà.";
+
+      return (
     <>
       <div className="main-header">
         <div>
-          <h1 className="main-title">Tableau de bord</h1>
+          <h1 className="main-title">Aujourd'hui</h1>
           <p className="main-subtitle">
-            Vue d’ensemble + actions rapides : alertes péremption et ajout d’un produit.
+            Ce que ta cuisine te conseille maintenant.
           </p>
         </div>
         <div className="main-header-right">
-          <span className="tag">Aperçu global</span>
+          <span className="tag">Cuisine du jour</span>
         </div>
       </div>
+
+      <section className="today-hero">
+        <div className="today-hero-media" aria-hidden="true" />
+        <div className="today-hero-content">
+          <span className="hero-eyebrow">Priorité</span>
+          <h2>{heroTitle}</h2>
+          <p>{heroText}</p>
+          <div className="hero-actions">
+            <button
+              type="button"
+              className="btn-primary btn-with-icon"
+              onClick={heroItem ? openRecipesFromDashboard : openPlanTodayFromDashboard}
+            >
+	              <span className={`btn-symbol ${heroItem ? 'btn-symbol--cook' : 'btn-symbol--calendar'}`} aria-hidden="true" />
+	              {heroItem ? 'Trouver une recette' : 'Composer un repas'}
+	            </button>
+	            <button type="button" className="btn-secondary btn-with-icon" onClick={() => setShowScanner(true)}>
+	              <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	              Scanner un produit
+	            </button>
+          </div>
+        </div>
+
+        <aside className="today-hero-panel">
+          <div className="hero-panel-row">
+            <span>Repas prévus</span>
+            <strong>{plannedMealCount}/3</strong>
+          </div>
+          <div className="hero-panel-row">
+            <span>Stock suivi</span>
+            <strong>{totalItems}</strong>
+          </div>
+          <div className="hero-panel-row">
+            <span>Calories</span>
+            <strong>{todayCalories}</strong>
+          </div>
+          <div className="stat-progress">
+            <div
+              className={remainingCalories >= 0 ? 'stat-progress-fill' : 'stat-progress-fill stat-progress-fill-danger'}
+              style={{ width: `${todayCaloriesPercent}%` }}
+            />
+          </div>
+          <p>{todayCaloriesStatus}</p>
+        </aside>
+      </section>
 
       {/* Recap */}
       <section className="stats-row">
         <div className="stat-card">
-          <div className="stat-label">Articles en stock</div>
+          <div className="stat-label">En cuisine</div>
           <div className="stat-value">{totalItems}</div>
-          <div className="stat-foot">Tous lieux confondus</div>
+          <div className="stat-foot">Placard, frigo, congélateur</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">À consommer bientôt</div>
+          <div className="stat-label">À sauver bientôt</div>
           <div className="stat-value accent">{soonItems}</div>
           <div className="stat-foot">Sur les {settings.soonDays} prochains jours</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Périmés</div>
+          <div className="stat-label">À vérifier</div>
           <div className="stat-value danger">{expiredItems}</div>
-          <div className="stat-foot">À vérifier rapidement</div>
+          <div className="stat-foot">DLC et DDM à contrôler</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Calories aujourd'hui</div>
+          <div className="stat-label">Énergie du jour</div>
           <div className="stat-value">{todayCalories}</div>
           <div className="stat-foot">
             Objectif {settings.dailyCalorieGoal} kcal · {todayCaloriesPercent}%
@@ -3252,15 +4065,15 @@ const renderStockTab = () => {
       </section>
 
       <section className="card card-soft">
-        <h2 className="section-title">À consommer en priorité</h2>
-        <p className="section-subtitle">Les produits les plus urgents à utiliser.</p>
+        <h2 className="section-title">À cuisiner en premier</h2>
+        <p className="section-subtitle">Les produits qui méritent de passer dans l'assiette.</p>
 
         <div className="field-row" style={{ marginBottom: '0.75rem' }}>
           <button type="button" className="btn-tertiary" onClick={() => openStockFromDashboard('soon')}>
             Voir le stock urgent
           </button>
           <button type="button" className="btn-tertiary" onClick={openRecipesFromDashboard}>
-            Trouver une recette
+            Trouver une idée
           </button>
         </div>
 
@@ -3305,7 +4118,7 @@ const renderStockTab = () => {
           </p>
 
           {soonList.length === 0 ? (
-            <p className="muted">Rien à signaler ✅</p>
+            <p className="muted">Rien à signaler.</p>
           ) : (
             <div className="chips-row">
               {soonList.map((item) => (
@@ -3333,7 +4146,7 @@ const renderStockTab = () => {
           </div>
 
           {expiredList.length === 0 ? (
-            <p className="muted">Aucun produit périmé ✅</p>
+            <p className="muted">Aucun produit périmé.</p>
           ) : (
             <div className="chips-row">
               {expiredList.map((item) => (
@@ -3361,7 +4174,7 @@ const renderStockTab = () => {
           </div>
 
           {ddmExceededList.length === 0 ? (
-            <p className="muted">Aucune DDM dépassée ✅</p>
+            <p className="muted">Aucune DDM dépassée.</p>
           ) : (
             <div className="chips-row">
               {ddmExceededList.map((item) => (
@@ -3387,8 +4200,9 @@ const renderStockTab = () => {
           <button type="button" className="btn-tertiary" onClick={openTodayMealsFromDashboard}>
             Ouvrir le menu
           </button>
-          <button type="button" className="btn-tertiary" onClick={openPlanTodayFromDashboard}>
-            Planifier aujourd'hui
+          <button type="button" className="btn-tertiary btn-with-icon" onClick={openPlanTodayFromDashboard}>
+            <span className="btn-symbol btn-symbol--calendar" aria-hidden="true" />
+            Planifier le jour
           </button>
         </div>
 
@@ -3451,11 +4265,20 @@ const renderStockTab = () => {
       </section>
 
       {/* Ajout produit */}
-      <section className="card" ref={addProductSectionRef}>
-       <h2 className="section-title">Ajouter un produit</h2>
-        <p className="section-subtitle">
-          Ajout rapide depuis le tableau de bord (scanner + auto-remplissage OpenFoodFacts).
-        </p>
+      <section className="card add-product-panel" ref={addProductSectionRef}>
+        <div className="form-panel-head">
+          <div>
+            <span className="hero-eyebrow">Entrée stock</span>
+            <h2 className="section-title">Ajouter un produit</h2>
+            <p className="section-subtitle">
+              Ajout rapide depuis le tableau de bord avec scanner et auto-remplissage OpenFoodFacts.
+            </p>
+          </div>
+	          <button type="button" className="btn-secondary btn-with-icon" onClick={() => setShowScanner(true)}>
+	            <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	            Scanner un produit
+	          </button>
+        </div>
 
         {addExistingProductId && (
           <div className="info-text" style={{ marginBottom: '0.75rem' }}>
@@ -3474,7 +4297,7 @@ const renderStockTab = () => {
           </div>
         )}
 
-        <form className="form-grid" onSubmit={handleAdd}>
+        <form className="form-grid product-form-grid" onSubmit={handleAdd}>
           <div className="field-group full">
             <label className="field-label">Nom du produit *</label>
             <input
@@ -3506,9 +4329,10 @@ const renderStockTab = () => {
                 className="field-input"
                 placeholder="Ex : 3017624010701"
               />
-              <button type="button" className="btn-secondary" onClick={() => setShowScanner(true)}>
-                📷 Scanner
-              </button>
+	              <button type="button" className="btn-secondary btn-with-icon" onClick={() => setShowScanner(true)}>
+	                <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	                Scanner
+	              </button>
             </div>
           </div>
           <div className="field-group">
@@ -3694,10 +4518,16 @@ const renderStockTab = () => {
         </form>
       </section>
     </>
-  );
+      );
+    };
 
 
   const renderShoppingTab = () => {
+    const openAddProductFlow = () => {
+      setActiveTab('dashboard');
+      setScrollToAddForm(true);
+    };
+
     const lowStockProductIds = new Set(
       lowStockList.filter((s) => s.product?.id).map((s) => s.product!.id),
     );
@@ -3981,7 +4811,7 @@ const renderStockTab = () => {
       setError(null);
       setActiveTab('dashboard');
       setScrollToAddForm(true);
-      setInfo('✅ Formulaire prérempli depuis la liste de courses. Complète la quantité, le lieu et la date.');
+      setInfo('Formulaire prérempli depuis la liste de courses. Complète la quantité, le lieu et la date.');
     };
 
     const sortedCurrentList = [...displayedShoppingList].sort(
@@ -3990,11 +4820,28 @@ const renderStockTab = () => {
         a.name.localeCompare(b.name),
     );
 
-    const title = shoppingSubTab === 'main' ? 'Aliments principaux manquants' : 'Autres aliments manquants';
+    const plannedMissingCount = sortedCurrentList.filter((product) =>
+      plannedMissingProductIds.has(product.id),
+    ).length;
+    const lowStockShoppingCount = sortedCurrentList.filter((product) =>
+      lowStockByProductId.has(product.id),
+    ).length;
+    const remainingShoppingCount = Math.max(0, visibleShoppingList.length - visibleCheckedCount);
+    const completionPercent = visibleShoppingList.length > 0
+      ? Math.round((visibleCheckedCount / visibleShoppingList.length) * 100)
+      : 0;
+    const shoppingHeroStats = [
+      { value: sortedCurrentList.length, label: 'à prendre' },
+      { value: remainingShoppingCount, label: 'restants' },
+      { value: plannedMissingCount, label: 'pour menus' },
+      { value: lowStockShoppingCount, label: 'stocks faibles' },
+    ];
+
+    const title = shoppingSubTab === 'main' ? 'Essentiels à racheter' : 'Compléments à racheter';
     const subtitle =
       shoppingSubTab === 'main'
-        ? 'Les aliments importants absents ou bientôt à racheter.'
-        : 'Les aliments connus absents ou bientôt à racheter.';
+        ? 'Les bases à garder dans la cuisine.'
+        : 'Les produits utiles selon tes envies et tes menus.';
 
     const grouped: { [key: string]: Product[] } = {};
     for (const p of sortedCurrentList) {
@@ -4004,38 +4851,96 @@ const renderStockTab = () => {
     }
 
     const categoryOrder: (string | MainCategory)[] = [...MAIN_CATEGORIES, 'Autres'];
+    const renderShoppingEmpty = (
+      emptyTitle: string,
+      emptyText: string,
+      actionLabel: string,
+      action: () => void,
+    ) => (
+      <div className="shopping-empty-state">
+        <div className="shopping-empty-visual" aria-hidden="true" />
+        <div>
+          <span className="hero-eyebrow">Liste claire</span>
+          <h3>{emptyTitle}</h3>
+          <p>{emptyText}</p>
+          <button type="button" className="btn-primary" onClick={action}>
+            {actionLabel}
+          </button>
+        </div>
+      </div>
+    );
 
     return (
       <>
         <div className="main-header">
           <div>
-            <h1 className="main-title">Listes de courses</h1>
-            <p className="main-subtitle">Ta liste auto en fonction de ce qui manque dans tes placards.</p>
+            <h1 className="main-title">Courses</h1>
+            <p className="main-subtitle">La liste utile, construite avec ton stock et ton planning.</p>
           </div>
           <div className="main-header-right">
-            <span className="tag">Basée sur ton stock</span>
+            <span className="tag">Liste intelligente</span>
           </div>
         </div>
 
-        <section className="card">
-          <div className="subtabs">
+        <section className="shopping-trip-band">
+          <div className="shopping-trip-media" aria-hidden="true" />
+          <div className="shopping-trip-content">
+            <span className="hero-eyebrow">Passage en magasin</span>
+            <h2>{pluralize(sortedCurrentList.length, 'article')} à regarder</h2>
+            <p>
+              {pluralize(plannedMissingCount, 'produit')} pour les repas prévus · {pluralize(lowStockShoppingCount, 'stock faible', 'stocks faibles')} · {pluralize(visibleCheckedCount, 'déjà coché')}
+            </p>
+            <div className="shopping-progress">
+              <div className="shopping-progress-top">
+                <span>Avancement</span>
+                <strong>{completionPercent}%</strong>
+              </div>
+              <div className="stat-progress">
+                <div className="stat-progress-fill" style={{ width: `${completionPercent}%` }} />
+              </div>
+            </div>
+            <div className="hero-actions">
+	              <button type="button" className="btn-primary btn-with-icon" onClick={() => setShowScanner(true)}>
+	                <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+	                Scanner un produit
+	              </button>
+              <button type="button" className="btn-secondary btn-with-icon" onClick={openAddProductFlow}>
+                <span className="btn-symbol btn-symbol--plus" aria-hidden="true" />
+                Ajouter au stock
+              </button>
+            </div>
+          </div>
+
+          <div className="shopping-trip-stats">
+            {shoppingHeroStats.map((stat) => (
+              <span key={stat.label}>
+                <strong>{stat.value}</strong>
+                {stat.label}
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section className="shopping-command-panel">
+          <div className="shopping-command-head">
+            <div className="subtabs">
             <button
               type="button"
               className={'subtab-btn' + (shoppingSubTab === 'main' ? ' subtab-btn--active' : '')}
               onClick={() => setShoppingSubTab('main')}
             >
-              ⭐ Aliments principaux
+              Essentiels
             </button>
             <button
               type="button"
               className={'subtab-btn' + (shoppingSubTab === 'others' ? ' subtab-btn--active' : '')}
               onClick={() => setShoppingSubTab('others')}
             >
-              Autres aliments
+              Compléments
             </button>
           </div>
 
-          <div className="subtabs" style={{ marginTop: '0.6rem' }}>
+            <div className="subtabs shopping-reason-tabs">
             {shoppingFilterOptions.map((option) => (
               <button
                 key={option.value}
@@ -4047,15 +4952,16 @@ const renderStockTab = () => {
               </button>
             ))}
           </div>
+          </div>
 
-          <div className="field-group full" style={{ marginTop: '0.75rem' }}>
-            <label className="field-label">Rechercher dans la liste</label>
+          <div className="field-group full shopping-search-field">
+            <label className="field-label">Recherche</label>
             <div className="field-row">
               <input
                 className="field-input"
                 value={shoppingSearch}
                 onChange={(e) => setShoppingSearch(e.target.value)}
-                placeholder="Nom, marque, raison, quantité prévue..."
+                placeholder="Produit, marque, raison..."
               />
               {shoppingSearch && (
                 <button type="button" className="btn-tertiary" onClick={() => setShoppingSearch('')}>
@@ -4085,12 +4991,14 @@ const renderStockTab = () => {
           </div>
 
           {visibleShoppingList.length > 0 && (
-            <p className="muted" style={{ marginTop: '0.45rem' }}>
-              {visibleCheckedCount} coché(s) sur {visibleShoppingList.length} visible(s).
+            <p className="muted shopping-command-count">
+              {pluralize(visibleCheckedCount, 'produit')} coché{visibleCheckedCount > 1 ? 's' : ''} sur {pluralize(visibleShoppingList.length, 'article')} visible{visibleShoppingList.length > 1 ? 's' : ''}.
             </p>
           )}
+        </section>
 
-          <h2 className="section-title" style={{ marginTop: '0.6rem' }}>
+        <section className="shopping-list-board">
+          <h2 className="section-title">
             {title}
           </h2>
           <p className="section-subtitle">{subtitle}</p>
@@ -4099,62 +5007,92 @@ const renderStockTab = () => {
 
 
           {currentList.length === 0 ? (
-            <p className="muted">Tout est à jour ✅</p>
+            renderShoppingEmpty(
+              'Rien à acheter dans cette section',
+              'Tes essentiels ou compléments sont couverts pour le moment. Tu peux ajouter un produit suivi ou préparer un menu pour générer de nouveaux besoins.',
+              'Ajouter au stock',
+              openAddProductFlow,
+            )
           ) : visibleShoppingList.length === 0 ? (
-            <p className="muted">Aucun aliment ne correspond à cette recherche.</p>
+            renderShoppingEmpty(
+              'Aucun article ne correspond',
+              'La recherche ou le filtre est trop précis. Reviens à la liste complète pour retrouver tes articles.',
+              'Réinitialiser',
+              resetShoppingControls,
+            )
           ) : displayedShoppingList.length === 0 ? (
-            <p className="muted">Tous les aliments visibles sont cochés.</p>
+            renderShoppingEmpty(
+              'Tout est coché',
+              'Les articles visibles sont marqués comme pris. Tu peux afficher les cochés ou remettre la tournée à zéro.',
+              'Afficher les cochés',
+              () => setHideCheckedShopping(false),
+            )
           ) : (
             categoryOrder.map((cat) => {
               const items = grouped[cat];
               if (!items || items.length === 0) return null;
               return (
-                <div key={cat} style={{ marginBottom: '0.9rem' }}>
-                  <h3 className="shopping-group-title">{cat}</h3>
+                <div key={cat} className="shopping-category-section">
+                  <div className="shopping-group-head">
+                    <h3 className="shopping-group-title">{cat}</h3>
+                    <span>{pluralize(items.length, 'article')}</span>
+                  </div>
                   <ul className="shopping-list">
                     {items.map((p) => {
                       const reason = getShoppingReason(p);
                       const isChecked = checkedShoppingIds.includes(p.id);
+                      const lowStockLabel = getLowStockLabel(p);
+                      const plannedLabel = getPlannedMissingLabel(p);
+
                       return (
                         <li key={p.id} className={'shopping-list-item' + (isChecked ? ' shopping-list-item--checked' : '')}>
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => toggleShoppingChecked(p.id)}
+                          <button
+                            type="button"
+                            className={'shopping-check' + (isChecked ? ' shopping-check--checked' : '')}
+                            aria-pressed={isChecked}
+                            onClick={() => toggleShoppingChecked(p.id)}
                             title="Marquer comme pris"
-                          />
-                          <span className="shopping-product-name">{p.name}</span>
-                          {p.brand && <span className="shopping-product-brand">{p.brand}</span>}
-
-                          {getLowStockLabel(p) && (
-                            <span className="shopping-product-brand">
-                              {getLowStockLabel(p)}
-                            </span>
-                          )}
-
-                          {getPlannedMissingLabel(p) && (
-                            <span className="shopping-product-brand">
-                              À prévoir : {getPlannedMissingLabel(p)}
-                            </span>
-                          )}
-                          <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>                          
-                          
-                          <button
-                            type="button"
-                            className="btn-tertiary"
-                            onClick={() => startAddFromShopping(p)}
                           >
-                            Ajouter au stock
+                            <span aria-hidden="true" />
                           </button>
-                          
-                          <button
-                            type="button"
-                            className="btn-tertiary"
-                            onClick={() => void hideFromShopping(p.id)}
-                            title="Retirer de la liste"
-                          >
-                            🗑️
-                          </button>
+
+                          <div className="shopping-item-main">
+                            <div className="shopping-item-heading">
+                              <div>
+                                <span className="shopping-product-name">{p.name}</span>
+                                <span className="shopping-product-brand">
+                                  {p.brand || p.generic_name || 'Produit à compléter'}
+                                </span>
+                              </div>
+                              <span className={`shopping-product-reason ${getShoppingReasonClass(p)}`}>{reason}</span>
+                            </div>
+
+                            <div className="shopping-item-details">
+                              {lowStockLabel && <span>{lowStockLabel}</span>}
+                              {plannedLabel && <span>À prévoir : {plannedLabel}</span>}
+                              {p.sub_category && <span>{p.sub_category}</span>}
+                            </div>
+                          </div>
+
+                          <div className="shopping-item-actions">
+                            <button
+                              type="button"
+                              className="btn-tertiary btn-with-icon"
+                              onClick={() => startAddFromShopping(p)}
+                            >
+                              <span className="btn-symbol btn-symbol--plus" aria-hidden="true" />
+                              Ajouter au stock
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn-tertiary"
+                              onClick={() => void hideFromShopping(p.id)}
+                              title="Retirer de la liste"
+                            >
+                              Retirer
+                            </button>
+                          </div>
                         </li>
                       );
                     })}
@@ -4168,25 +5106,16 @@ const renderStockTab = () => {
     );
   };
 
-  const renderSettingsTab = () => (
-    <>
-      <div className="main-header">
-        <div>
-          <h1 className="main-title">Réglages</h1>
-          <p className="main-subtitle">Personnalise les seuils d’alerte, règles recettes et valeurs par défaut.</p>
-        </div>
-        <div className="main-header-right">
-          <span className="tag">Sauvegarde locale</span>
-        </div>
-      </div>
-
-      <section className="card">
-        <h2 className="section-title">Péremption</h2>
-        <p className="section-subtitle">À partir de combien de jours : “à consommer bientôt”.</p>
-
-        <div className="form-grid">
+  const renderSettingsTab = () => {
+    const settingCards = [
+      {
+        eyebrow: 'Péremption',
+        title: 'Seuil bientôt',
+        text: "Nombre de jours avant qu'un produit soit mis en avant.",
+        value: `${settings.soonDays} j`,
+        control: (
           <div className="field-group">
-            <label className="field-label">Seuil “bientôt” (jours)</label>
+            <label className="field-label">Jours avant alerte</label>
             <input
               type="number"
               min={1}
@@ -4200,16 +5129,16 @@ const renderStockTab = () => {
               className="field-input"
             />
           </div>
-        </div>
-      </section>
-
-      <section className="card" style={{ marginTop: '0.9rem' }}>
-        <h2 className="section-title">Recettes</h2>
-        <p className="section-subtitle">Recette “faisable” si ≤ X ingrédients manquants.</p>
-
-        <div className="form-grid">
+        ),
+      },
+      {
+        eyebrow: 'Recettes',
+        title: 'Tolérance ingrédients',
+        text: 'Nombre maximum de manquants pour afficher une recette comme faisable.',
+        value: `${settings.recipesMaxMissing} max`,
+        control: (
           <div className="field-group">
-            <label className="field-label">Max ingrédients manquants</label>
+            <label className="field-label">Ingrédients manquants</label>
             <input
               type="number"
               min={0}
@@ -4226,16 +5155,16 @@ const renderStockTab = () => {
               className="field-input"
             />
           </div>
-        </div>
-      </section>
-
-      <section className="card" style={{ marginTop: '0.9rem' }}>
-        <h2 className="section-title">Calories</h2>
-        <p className="section-subtitle">Objectif quotidien affiché sur le tableau de bord.</p>
-
-        <div className="form-grid">
+        ),
+      },
+      {
+        eyebrow: 'Calories',
+        title: 'Objectif quotidien',
+        text: 'Repère affiché sur le tableau de bord pour suivre la journée.',
+        value: `${settings.dailyCalorieGoal} kcal`,
+        control: (
           <div className="field-group">
-            <label className="field-label">Objectif calories par jour</label>
+            <label className="field-label">Calories par jour</label>
             <input
               type="number"
               min={0}
@@ -4252,16 +5181,16 @@ const renderStockTab = () => {
               className="field-input"
             />
           </div>
-        </div>
-      </section>
-
-      <section className="card" style={{ marginTop: '0.9rem' }}>
-        <h2 className="section-title">Placards</h2>
-        <p className="section-subtitle">Valeurs par défaut lors de l’ajout d’un produit.</p>
-
-        <div className="form-grid">
-          <div className="field-group full">
-            <label className="field-label">Lieu par défaut</label>
+        ),
+      },
+      {
+        eyebrow: 'Placards',
+        title: 'Lieu par défaut',
+        text: "Emplacement prérempli quand tu ajoutes un produit.",
+        value: settings.defaultPlace || 'Placard',
+        control: (
+          <div className="field-group">
+            <label className="field-label">Lieu favori</label>
             <input
               value={settings.defaultPlace}
               onChange={(e) => {
@@ -4272,18 +5201,206 @@ const renderStockTab = () => {
               placeholder="Placard, Frigo, Congélateur..."
             />
           </div>
+        ),
+      },
+    ];
+    const customizableRecipes = [...dbRecipes, ...SAMPLE_RECIPES].map(applyRecipeOverrides);
+    const changeSettingsImage = async (
+      event: ChangeEvent<HTMLInputElement>,
+      kind: ImageAssetKind,
+      imageKey: string,
+    ) => {
+      const input = event.currentTarget;
+      const file = input.files?.[0];
+      if (!file) return;
+
+      const uploadKey = `${kind}:${imageKey}`;
+      setImageUploadingKey(uploadKey);
+      setSettingsInfo(null);
+      setError(null);
+
+      try {
+        await uploadImageAsset(kind, imageKey, file);
+        setSettingsInfo('Photo mise à jour dans Supabase.');
+      } catch (uploadError) {
+        console.error(uploadError);
+        setError(getErrorMessage(uploadError) ?? "Impossible d'envoyer cette photo.");
+      } finally {
+        setImageUploadingKey(null);
+        input.value = '';
+      }
+    };
+    const resetSettingsImage = async (kind: ImageAssetKind, imageKey: string) => {
+      const uploadKey = `${kind}:${imageKey}`;
+      setImageUploadingKey(uploadKey);
+      setSettingsInfo(null);
+      setError(null);
+
+      try {
+        await resetImageAsset(kind, imageKey);
+        setSettingsInfo('Photo réinitialisée.');
+      } catch (resetError) {
+        console.error(resetError);
+        setError(getErrorMessage(resetError) ?? 'Impossible de réinitialiser cette photo.');
+      } finally {
+        setImageUploadingKey(null);
+      }
+    };
+
+    return (
+      <>
+        <div className="main-header">
+          <div>
+            <h1 className="main-title">Réglages</h1>
+            <p className="main-subtitle">Tes préférences de stock, recettes et suivi du jour.</p>
+          </div>
+          <div className="main-header-right">
+            <span className="tag">Préférences</span>
+          </div>
         </div>
 
-        <div className="form-actions">
-          <button type="button" className="btn-primary" onClick={() => setSettingsInfo('✅ Réglages enregistrés.')}>
-            Enregistrer
-          </button>
-        </div>
+        <section className="settings-hero">
+          <div>
+            <span className="hero-eyebrow">Cuisine sur mesure</span>
+            <h2>Une app réglée sur ta façon de stocker</h2>
+            <p>Ces valeurs pilotent les alertes, les recettes proposées, les calories et les lieux par défaut.</p>
+          </div>
+          <div className="settings-hero-stats">
+            <span><strong>{settings.soonDays}</strong>jours</span>
+            <span><strong>{settings.recipesMaxMissing}</strong>manquants</span>
+            <span><strong>{settings.dailyCalorieGoal}</strong>kcal</span>
+          </div>
+        </section>
 
-        {settingsInfo && <p className="info-text">{settingsInfo}</p>}
-      </section>
-    </>
-  );
+        <section className="settings-grid">
+          {settingCards.map((card) => (
+            <article key={card.title} className="settings-card">
+              <div className="settings-card-head">
+                <span className="hero-eyebrow">{card.eyebrow}</span>
+                <strong>{card.value}</strong>
+              </div>
+              <h2>{card.title}</h2>
+              <p>{card.text}</p>
+              {card.control}
+            </article>
+          ))}
+        </section>
+
+        <section className="settings-image-panel">
+          <div className="settings-section-head">
+            <div>
+              <span className="hero-eyebrow">Photos de l'app</span>
+              <h2>Images des écrans</h2>
+              <p>Choisis des fichiers image : ils seront envoyés dans le bucket Supabase de l'app.</p>
+            </div>
+          </div>
+
+          <div className="image-settings-grid">
+            {APP_IMAGE_FIELDS.map((field) => (
+              <article key={field.key} className="image-setting-card">
+                <div
+                  className="image-setting-preview"
+                  style={{ '--image-setting-preview': cssImageUrl(appImages[field.key]) } as CSSProperties}
+                  aria-hidden="true"
+                />
+                <div className="image-setting-body">
+                  <div>
+                    <h3>{field.label}</h3>
+                    <p>{field.description}</p>
+                  </div>
+                  <div className="field-group">
+                    <label className="field-label">Remplacer la photo</label>
+                    <input
+                      className="field-input file-input"
+                      type="file"
+                      accept={IMAGE_FILE_ACCEPT}
+                      disabled={imageUploadingKey === `app:${field.key}`}
+                      onChange={(event) => void changeSettingsImage(event, 'app', field.key)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-tertiary"
+                    disabled={imageUploadingKey === `app:${field.key}`}
+                    onClick={() => void resetSettingsImage('app', field.key)}
+                  >
+                    {imageUploadingKey === `app:${field.key}` ? 'Envoi...' : 'Réinitialiser'}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="settings-image-panel">
+          <div className="settings-section-head">
+            <div>
+              <span className="hero-eyebrow">Photos recettes</span>
+              <h2>Images du carnet</h2>
+              <p>Chaque recette peut avoir sa propre photo hébergée dans Supabase.</p>
+            </div>
+          </div>
+
+          <div className="recipe-image-settings-grid">
+            {customizableRecipes.map((recipe) => {
+              const currentImage = recipeImageFor(recipe, recipeImages);
+
+              return (
+                <article key={recipe.id} className="recipe-image-setting-card">
+                  <div
+                    className="recipe-image-setting-preview"
+                    style={{ '--image-setting-preview': cssImageUrl(currentImage) } as CSSProperties}
+                    aria-hidden="true"
+                  />
+                  <div className="recipe-image-setting-body">
+                    <div>
+                      <h3>{recipe.name}</h3>
+                      <p>{recipe.kind === 'savory' ? 'Salé' : 'Sucré'} · {pluralize(recipe.ingredients.length, 'ingrédient')}</p>
+                    </div>
+                    <div className="field-group">
+                      <label className="field-label">Remplacer la photo</label>
+                      <div className="field-row">
+                        <input
+                          className="field-input file-input"
+                          type="file"
+                          accept={IMAGE_FILE_ACCEPT}
+                          disabled={imageUploadingKey === `recipe:${recipe.id}`}
+                          onChange={(event) => void changeSettingsImage(event, 'recipe', recipe.id)}
+                        />
+                        {recipeImages[recipe.id] && (
+                          <button
+                            type="button"
+                            className="btn-tertiary"
+                            disabled={imageUploadingKey === `recipe:${recipe.id}`}
+                            onClick={() => void resetSettingsImage('recipe', recipe.id)}
+                          >
+                            {imageUploadingKey === `recipe:${recipe.id}` ? 'Envoi...' : 'Réinitialiser'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="settings-save-panel">
+          <div>
+	            <span className="hero-eyebrow">Préférences du navigateur</span>
+	            <h2>Préférences prêtes</h2>
+	            <p>Les réglages rapides restent sur cet appareil. Les photos et recettes personnalisées sont synchronisées avec Supabase.</p>
+	          </div>
+	          <button type="button" className="btn-primary" onClick={() => setSettingsInfo('Réglages enregistrés.')}>
+	            Confirmer
+	          </button>
+	          {error && <p className="error-text">{error}</p>}
+	          {settingsInfo && <p className="info-text">{settingsInfo}</p>}
+	        </section>
+      </>
+    );
+  };
 
   const renderRecipesTab = () => {
     if (recipesLoading) {
@@ -4369,9 +5486,9 @@ const renderStockTab = () => {
     };
 
     // ✅ IMPORTANT : recettes DB + catalogue d'exemples
-    const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES];
+    const allRecipes: Recipe[] = [...dbRecipes, ...SAMPLE_RECIPES].map(applyRecipeOverrides);
 
-    const enriched = allRecipes.map((r) => {
+    const enriched: EnrichedRecipe[] = allRecipes.map((r) => {
       const missing = r.ingredients
         .filter((ing: RecipeIngredient) => !hasEnoughIngredient(ing))
         .map((ing: RecipeIngredient) => ing.name);
@@ -4427,104 +5544,176 @@ const renderStockTab = () => {
       .filter((r) => r.feasible)
       .sort((a, b) => b.urgentCount - a.urgentCount || a.missingCount - b.missingCount);
 
-    const current = recipesSubTab === 'feasible' ? feasibleList : filteredRecipes;
+    const showRecipeInspiration =
+      recipesSubTab === 'feasible'
+      && feasibleList.length === 0
+      && recipeFilter === 'all'
+      && filteredRecipes.length > 0;
+
+    const current = recipesSubTab === 'feasible'
+      ? (showRecipeInspiration ? filteredRecipes.slice(0, 12) : feasibleList)
+      : filteredRecipes;
     const savory = current.filter((r) => r.kind === 'savory');
     const sweet = current.filter((r) => r.kind === 'sweet');
+    const readyRecipesCount = enriched.filter((recipe) => recipe.missingCount === 0).length;
+    const urgentRecipesCount = enriched.filter((recipe) => recipe.urgentCount > 0).length;
+    const cookBandMetrics = showRecipeInspiration
+      ? [
+          { value: current.length, label: 'idées' },
+          { value: savory.length, label: 'salées' },
+          { value: sweet.length, label: 'sucrées' },
+        ]
+      : [
+          { value: feasibleList.length, label: 'faisables' },
+          { value: readyRecipesCount, label: 'prêtes' },
+          { value: urgentRecipesCount, label: 'anti-gaspi' },
+        ];
 
     const headerTitle =
-      recipesSubTab === 'feasible'
-        ? `Recettes faisables (≤ ${settings.recipesMaxMissing} ingrédients manquants)`
-        : 'Recettes en général';
+      showRecipeInspiration
+        ? 'Inspirations pour démarrer'
+        : recipesSubTab === 'feasible'
+        ? `Faisable avec ton stock`
+        : 'Toutes tes idées';
 
     const headerSubtitle =
-      recipesSubTab === 'feasible'
-        ? `Basé sur ton stock actuel, les produits ouverts et les dates proches. On accepte jusqu’à ${settings.recipesMaxMissing} ingrédients manquants.`
-        : 'Catalogue de recettes (exemples) séparées en sucré / salé.';
+      showRecipeInspiration
+        ? 'Ajoute quelques produits au stock pour transformer ces idées en recettes faisables.'
+        : recipesSubTab === 'feasible'
+        ? `On accepte jusqu'à ${pluralize(settings.recipesMaxMissing, 'ingrédient')} manquant${settings.recipesMaxMissing > 1 ? 's' : ''}.`
+        : 'Recettes enregistrées et idées de base.';
 
-    const renderRecipeCard = (r: any) => {
+    const renderRecipeCard = (r: EnrichedRecipe) => {
+      const isReady = r.missingCount === 0;
       const badge =
         r.urgentCount > 0
-          ? `${r.urgentCount} urgent(s) · ${r.missingCount} manquant(s)`
-          : `${r.missingCount} manquant(s)`;
+          ? `${pluralize(r.urgentCount, 'urgent')} · ${pluralize(r.missingCount, 'manquant')}`
+          : pluralize(r.missingCount, 'manquant');
       const isDbRecipe = dbRecipes.some((x) => x.id === r.id); // permet d'afficher "supprimer" seulement sur DB
       const kcalR = kcalForRecipe(r, products);
+      const visibleIngredients = r.ingredients.slice(0, 5);
+      const remainingIngredients = r.ingredients.length - visibleIngredients.length;
+      const tagLabel = r.tags?.[0] ?? (r.kind === 'savory' ? 'Plat' : 'Dessert');
+      const readinessLabel = isReady
+        ? 'Prête'
+        : r.feasible
+          ? `${r.missingCount} à acheter`
+          : pluralize(r.missingCount, 'manquant');
+      const readinessClass = isReady
+        ? ' recipe-readiness-pill--ready'
+        : r.feasible
+          ? ''
+          : ' recipe-readiness-pill--missing';
+      const recipeCardStyle = {
+        '--recipe-image': cssImageUrl(recipeImageFor(r, recipeImages)),
+      } as CSSProperties;
+
       return (
-        <div key={r.id} className="recipe-card">
-          <div className="recipe-head">
-            <h3 className="recipe-title">{r.name}</h3>
+        <div key={r.id} className="recipe-card recipe-card--visual" style={recipeCardStyle}>
+          <div className="recipe-card-media">
+            <div className="recipe-media-top">
+              <span className="recipe-kind-pill">{r.kind === 'savory' ? 'Salé' : 'Sucré'}</span>
+              <span className={'recipe-readiness-pill' + readinessClass}>{readinessLabel}</span>
+            </div>
+            <div className="recipe-media-bottom">
+              <span>{tagLabel}</span>
+              <span>{r.servings ? pluralize(r.servings, 'portion') : 'Recette'}</span>
+            </div>
+          </div>
 
-            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-              {recipesSubTab === 'feasible' && <span className="recipe-badge">{badge}</span>}
-
-              {isDbRecipe && (
-                <>
+          <div className="recipe-card-body">
+            <div className="recipe-head">
+              <div>
+                <h3 className="recipe-title">{r.name}</h3>
+                <div className="recipe-meta-row">
+                  <span>
+                    {kcalR.approx ? '≈ ' : ''}{kcalR.kcal} kcal
+                  </span>
+                  <span>{pluralize(r.ingredients.length, 'ingrédient')}</span>
+                </div>
+              </div>
+              <div className="recipe-head-actions">
+                <button
+                  type="button"
+                  className="recipe-delete-btn btn-with-icon"
+                  onClick={() => openEditRecipe(r)}
+                  title="Modifier cette recette"
+                >
+                  <span className="btn-symbol btn-symbol--edit" aria-hidden="true" />
+                  Modifier
+                </button>
+                {isDbRecipe && (
                   <button
                     type="button"
-                    className="recipe-delete-btn"
-                    onClick={() => openEditRecipe(r)}
-                    title="Modifier cette recette"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    type="button"
-                    className="recipe-delete-btn"
-                    onClick={() => void deleteRecipeInDb(r.id)}
-                    title="Supprimer cette recette"
-                  >
-                    🗑️
-                  </button>
-                </>
+                  className="recipe-delete-btn recipe-delete-btn--danger btn-with-icon"
+                  onClick={() => void deleteRecipeInDb(r.id)}
+                  title="Supprimer cette recette"
+                >
+                  <span className="btn-symbol btn-symbol--trash" aria-hidden="true" />
+                  Supprimer
+                </button>
+                )}
+              </div>
+            </div>
+
+            {recipesSubTab === 'feasible' && (
+              <div className="recipe-stock-line">
+                <span className="recipe-badge">{isReady ? 'Tout est disponible' : badge}</span>
+              </div>
+            )}
+
+            {r.urgentIngredients.length > 0 && (
+              <p className="recipe-urgent">
+                À utiliser vite : {r.urgentIngredients.join(', ')}
+              </p>
+            )}
+
+            <p className="recipe-subtitle">Ingrédients clés</p>
+            <ul className="recipe-list recipe-list--preview">
+              {visibleIngredients.map((ing: RecipeIngredient) => {
+                const ok = hasEnoughIngredient(ing);
+                return (
+                  <li key={`${r.id}-${ing.name}`} className={ok ? 'ing-ok' : 'ing-missing'}>
+                    <span className="ingredient-state" aria-hidden="true" />
+                    <span>
+                      {ing.name}
+                      {ing.amount != null && ing.unit ? ` — ${ing.amount} ${ing.unit}` : ''}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {remainingIngredients > 0 && (
+              <p className="recipe-more">+ {pluralize(remainingIngredients, 'ingrédient')}</p>
+            )}
+
+            {kcalR.missingCount > 0 && (
+              <p className="recipe-meta">
+                {pluralize(kcalR.missingCount, 'ingrédient')} sans calcul nutritionnel.
+              </p>
+            )}
+
+            <div className="recipe-card-actions">
+              <button
+                type="button"
+                className="recipe-add-btn recipe-add-btn--primary btn-with-icon"
+                onClick={() => openPlanFromRecipe(r)}
+              >
+                <span className="btn-symbol btn-symbol--calendar" aria-hidden="true" />
+                Planifier ce repas
+              </button>
+              {recipesSubTab === 'feasible' && r.missingCount > 0 && (
+                <button
+                  type="button"
+                  className="recipe-add-btn"
+                  onClick={() => void addMissingIngredientsToShopping(r.missing, r.kind)}
+                >
+                  Ajouter aux courses
+                </button>
               )}
             </div>
           </div>
-          
-          <div className="recipe-actions">
-            <button
-              type="button"
-              className="recipe-add-btn"
-              onClick={() => openPlanFromRecipe(r)}
-            >
-              Planifier
-            </button>
-          </div>
-
-          {r.urgentIngredients.length > 0 && (
-            <p className="recipe-urgent">
-              À utiliser vite : {r.urgentIngredients.join(', ')}
-            </p>
-          )}
-
-          <p className="recipe-subtitle">Ingrédients :</p>
-          <ul className="recipe-list">
-            {r.ingredients.map((ing: RecipeIngredient) => {
-              const ok = hasEnoughIngredient(ing);
-              return (
-                <li key={`${r.id}-${ing.name}`} className={ok ? 'ing-ok' : 'ing-missing'}>
-                  {ok ? '✅ ' : '❌ '}
-                  {ing.name}
-                  {ing.amount != null && ing.unit ? ` — ${ing.amount} ${ing.unit}` : ''}
-                </li>
-              );
-            })}
-          </ul>
-          
-          <div className="recipe-meta">
-            🔥 {kcalR.approx ? '≈ ' : ''}{kcalR.kcal} kcal
-            {r.servings ? ` · ${r.servings} portion(s)` : ''}
-            {kcalR.missingCount > 0 ? ` · (${kcalR.missingCount} ingrédient(s) non calculés)` : ''}
-          </div>
-          {recipesSubTab === 'feasible' && r.missingCount > 0 && (
-            <div className="recipe-actions">
-              <button
-                type="button"
-                className="recipe-add-btn"
-                onClick={() => void addMissingIngredientsToShopping(r.missing, r.kind)}
-              >
-                ➕ Ajouter les ingrédients manquants à la liste de courses
-              </button>
-            </div>
-          )}
         </div>
       );
     };
@@ -4533,23 +5722,51 @@ const renderStockTab = () => {
       <>
         <div className="main-header">
           <div>
-            <h1 className="main-title">Recettes</h1>
+            <h1 className="main-title">Cuisiner</h1>
             <p className="main-subtitle">{headerSubtitle}</p>
           </div>
           <div className="main-header-right">
-            <span className="tag">Prototype</span>
+            <span className="tag">Idées repas</span>
           </div>
         </div>
 
+        <section className="cook-band">
+          <div>
+            <span className="hero-eyebrow">Avec ton stock</span>
+            <h2>Des idées sans repartir de zéro</h2>
+            <p>
+              L'app repère ce que tu as, ce qui expire et ce qu'il manque pour transformer ton stock en repas.
+            </p>
+          </div>
+          <div className="cook-band-side">
+            <div className="cook-band-metrics">
+              {cookBandMetrics.map((metric) => (
+                <span key={metric.label}><strong>{metric.value}</strong> {metric.label}</span>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn-primary cook-band-create btn-with-icon"
+              onClick={() => {
+                setError(null);
+                setNewRecipeOpen(true);
+              }}
+            >
+              <span className="btn-symbol btn-symbol--cook" aria-hidden="true" />
+              Créer une recette
+            </button>
+          </div>
+        </section>
+
         <section className="card">
           <div className="field-group full">
-            <label className="field-label">Rechercher une recette</label>
+            <label className="field-label">Recherche</label>
             <div className="field-row">
               <input
                 className="field-input"
                 value={recipeSearch}
                 onChange={(e) => setRecipeSearch(e.target.value)}
-                placeholder="Nom, ingrédient, type, ingrédient manquant..."
+                placeholder="Recette, ingrédient, envie..."
               />
               {recipeSearch && (
                 <button type="button" className="btn-tertiary" onClick={() => setRecipeSearch('')}>
@@ -4572,66 +5789,8 @@ const renderStockTab = () => {
             </div>
 
             <p className="muted" style={{ marginTop: '0.4rem' }}>
-              {current.length} recette(s) affichée(s) sur {enriched.length}.
+              {pluralize(current.length, 'recette')} affichée{current.length > 1 ? 's' : ''} sur {enriched.length}.
             </p>
-          </div>
-        </section>
-
-        {/* ✅ Formulaire : Ajouter une recette (DB) */}
-        <section className="card" style={{ marginBottom: '0.9rem' }}>
-          <h2 className="section-title">Ajouter une recette</h2>
-          <p className="section-subtitle">Sépare les ingrédients par des virgules (ex : oeuf, farine, lait).</p>
-
-          <div className="form-grid">
-            <div className="field-group full">
-              <label className="field-label">Nom</label>
-              <input
-                className="field-input"
-                placeholder="Ex : Gratin de pâtes"
-                value={newRecipeName}
-                onChange={(e) => setNewRecipeName(e.target.value)}
-              />
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">Type</label>
-              <select
-                className="field-input"
-                value={newRecipeKind}
-                onChange={(e) => setNewRecipeKind(e.target.value as RecipeKind)}
-              >
-                <option value="savory">Salé</option>
-                <option value="sweet">Sucré</option>
-              </select>
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">Portions</label>
-              <input
-                className="field-input"
-                type="number"
-                min={1}
-                value={newRecipeServings}
-                onChange={(e) => setNewRecipeServings(e.target.value)}
-              />
-            </div>
-
-
-            <div className="field-group full">
-              <label className="field-label">Ingrédients (virgules)</label>
-              <input
-                className="field-input"
-                placeholder="oeuf, fromage, huile..."
-                value={newRecipeIngredients}
-                onChange={(e) => setNewRecipeIngredients(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="form-actions">
-            <button type="button" className="btn-primary" onClick={() => void createRecipeInDb()}>
-              Ajouter la recette
-            </button>
           </div>
         </section>
 
@@ -4642,14 +5801,14 @@ const renderStockTab = () => {
               className={'subtab-btn' + (recipesSubTab === 'feasible' ? ' subtab-btn--active' : '')}
               onClick={() => setRecipesSubTab('feasible')}
             >
-              ✅ Faisables
+              Faisables
             </button>
             <button
               type="button"
               className={'subtab-btn' + (recipesSubTab === 'all' ? ' subtab-btn--active' : '')}
               onClick={() => setRecipesSubTab('all')}
             >
-              📚 Toutes
+              Toutes
             </button>
           </div>
 
@@ -4658,7 +5817,7 @@ const renderStockTab = () => {
           </h2>
 
           <div className="recipe-section">
-            <h3 className="recipe-section-title">🥘 Salé</h3>
+            <h3 className="recipe-section-title">Salé</h3>
             {savory.length === 0 ? (
               <p className="muted">
                 {recipesSubTab === 'feasible'
@@ -4671,7 +5830,7 @@ const renderStockTab = () => {
           </div>
 
           <div className="recipe-section" style={{ marginTop: '1rem' }}>
-            <h3 className="recipe-section-title">🍰 Sucré</h3>
+            <h3 className="recipe-section-title">Sucré</h3>
             {sweet.length === 0 ? (
               <p className="muted">
                 {recipesSubTab === 'feasible'
@@ -4707,6 +5866,34 @@ const renderStockTab = () => {
     </>
   );
 
+  const newRecipeIngredientCount = newRecipeIngredients.trim()
+    ? parseRecipeIngredients(newRecipeIngredients).length
+    : 0;
+  const newRecipeServingCount = Number(newRecipeServings);
+  const newRecipePreviewServings =
+    Number.isFinite(newRecipeServingCount) && newRecipeServingCount > 0
+      ? newRecipeServingCount
+      : 1;
+  const editRecipeIngredientCount = editRecipeIngredients.trim()
+    ? parseRecipeIngredients(editRecipeIngredients).length
+    : 0;
+  const editRecipeServingCount = Number(editRecipeServings);
+  const editRecipePreviewServings =
+    Number.isFinite(editRecipeServingCount) && editRecipeServingCount > 0
+      ? editRecipeServingCount
+      : 1;
+  const editProductQuantityLabel = `${editQty || '0'} ${editUnit || 'unité'}`;
+  const appImageStyle = {
+    '--image-dashboard-hero': cssImageUrl(appImages.dashboardHero),
+    '--image-stock-hero': cssImageUrl(appImages.stockHero),
+    '--image-stock-empty': cssImageUrl(appImages.stockEmpty),
+    '--image-shopping-hero': cssImageUrl(appImages.shoppingHero),
+    '--image-shopping-empty': cssImageUrl(appImages.shoppingEmpty),
+    '--image-planning-hero': cssImageUrl(appImages.planningHero),
+    '--image-history-hero': cssImageUrl(appImages.historyHero),
+    '--image-history-empty': cssImageUrl(appImages.historyEmpty),
+  } as CSSProperties;
+
   let mainContent: ReactNode;
   if (activeTab === 'dashboard') mainContent = renderDashboard();
   else if (activeTab === 'stock') mainContent = renderStockTab();
@@ -4718,22 +5905,179 @@ const renderStockTab = () => {
   else mainContent = renderPlaceholder('Section', 'À venir');
 
   return (
-    <div className="app-root">
+    <div className={`app-root app-root--${activeTab}`} style={appImageStyle}>
       {showScanner && (
         <BarcodeScanner onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />
       )}
 
-      {editRecipeOpen && editRecipeTarget && (
+      {newRecipeOpen && (
         <div className="modal-backdrop">
-          <div className="modal-card">
+          <div className="modal-card recipe-modal-card">
             <div className="modal-head">
-              <h3 style={{ margin: 0 }}>Modifier une recette</h3>
-              <button type="button" className="modal-close" onClick={() => setEditRecipeOpen(false)}>
+              <div>
+                <p className="modal-eyebrow">Carnet maison</p>
+                <h3 className="modal-title">Nouvelle recette</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Fermer la fenêtre"
+                onClick={() => {
+                  setError(null);
+                  setNewRecipeImageSelection(null);
+                  setNewRecipeOpen(false);
+                }}
+              >
                 ✕
               </button>
             </div>
 
-            <div className="form-grid" style={{ marginTop: '0.5rem' }}>
+            <p className="modal-subtitle">
+              Ajoute une idée simple, puis VPlacard la comparera au stock pour les menus et les courses.
+            </p>
+
+            <div
+              className="modal-image-preview"
+              style={{
+                '--modal-image': cssImageUrl(newRecipeImagePreview || RECIPE_IMAGE_POOL[newRecipeKind][0]),
+              } as CSSProperties}
+              aria-hidden="true"
+            />
+
+            <div className="recipe-modal-preview">
+              <span>{newRecipeKind === 'savory' ? 'Salé' : 'Sucré'}</span>
+              <span>{pluralize(newRecipeIngredientCount, 'ingrédient')}</span>
+              <span>{pluralize(newRecipePreviewServings, 'portion')}</span>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: '0.85rem' }}>
+              <div className="field-group full">
+                <label className="field-label">Nom</label>
+                <input
+                  className="field-input"
+                  placeholder="Ex : Gratin de pâtes"
+                  value={newRecipeName}
+                  onChange={(e) => setNewRecipeName(e.target.value)}
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Type</label>
+                <select
+                  className="field-input"
+                  value={newRecipeKind}
+                  onChange={(e) => setNewRecipeKind(e.target.value as RecipeKind)}
+                >
+                  <option value="savory">Salé</option>
+                  <option value="sweet">Sucré</option>
+                </select>
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Portions</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  value={newRecipeServings}
+                  onChange={(e) => setNewRecipeServings(e.target.value)}
+                />
+              </div>
+
+              <div className="field-group full">
+                <label className="field-label">Ingrédients</label>
+                <textarea
+                  className="field-input"
+                  rows={4}
+                  placeholder="oeuf 3 unité, fromage 40 g, huile 15 ml..."
+                  value={newRecipeIngredients}
+                  onChange={(e) => setNewRecipeIngredients(e.target.value)}
+                />
+              </div>
+
+              <div className="field-group full">
+                <label className="field-label">Photo de la recette</label>
+                <div className="field-row">
+                  <input
+                    className="field-input file-input"
+                    type="file"
+                    accept={IMAGE_FILE_ACCEPT}
+                    onChange={(event) => setNewRecipeImageSelection(event.currentTarget.files?.[0] ?? null)}
+                  />
+                  {newRecipeImageFile && (
+                    <button type="button" className="btn-tertiary" onClick={() => setNewRecipeImageSelection(null)}>
+                      Retirer
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {error && <p className="error-text">{error}</p>}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setError(null);
+                  setNewRecipeImageSelection(null);
+                  setNewRecipeOpen(false);
+                }}
+              >
+                Annuler
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void createRecipeInDb()}>
+                Créer la recette
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editRecipeOpen && editRecipeTarget && (
+        <div className="modal-backdrop">
+          <div className="modal-card recipe-modal-card">
+            <div className="modal-head">
+              <div>
+                <p className="modal-eyebrow">Carnet maison</p>
+                <h3 className="modal-title">Modifier la recette</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Fermer la fenêtre"
+                onClick={() => {
+                  setEditRecipeImageSelection(null);
+                  setEditRecipeOpen(false);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="modal-subtitle">
+              Ajuste les portions et les ingrédients pour que les suggestions de repas restent fiables.
+            </p>
+
+            <div
+              className="modal-image-preview"
+              style={{
+                '--modal-image': cssImageUrl(
+                  editRecipeImagePreview
+                  || (editRecipeTarget ? recipeImageFor(editRecipeTarget, recipeImages) : RECIPE_IMAGE_POOL[editRecipeKind][0]),
+                ),
+              } as CSSProperties}
+              aria-hidden="true"
+            />
+
+            <div className="recipe-modal-preview">
+              <span>{editRecipeKind === 'savory' ? 'Salé' : 'Sucré'}</span>
+              <span>{pluralize(editRecipeIngredientCount, 'ingrédient')}</span>
+              <span>{pluralize(editRecipePreviewServings, 'portion')}</span>
+            </div>
+
+            <div className="form-grid modal-form-grid">
               <div className="field-group full">
                 <label className="field-label">Nom</label>
                 <input
@@ -4775,163 +6119,247 @@ const renderStockTab = () => {
                   rows={4}
                 />
               </div>
+
+              <div className="field-group full">
+                <label className="field-label">Photo de la recette</label>
+                <div className="field-row">
+                  <input
+                    className="field-input file-input"
+                    type="file"
+                    accept={IMAGE_FILE_ACCEPT}
+                    onChange={(event) => setEditRecipeImageSelection(event.currentTarget.files?.[0] ?? null)}
+                  />
+                  {editRecipeImageFile && (
+                    <button type="button" className="btn-tertiary" onClick={() => setEditRecipeImageSelection(null)}>
+                      Retirer
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
+
+	            <div className="modal-actions">
+	              <button
+	                type="button"
+	                className="btn-secondary"
+	                onClick={() => {
+	                  setEditRecipeImageSelection(null);
+	                  setEditRecipeOpen(false);
+	                }}
+	              >
+	                Annuler
+	              </button>
+	              <button type="button" className="btn-primary" onClick={() => void saveEditRecipe()}>
+	                Enregistrer la recette
+	              </button>
+	            </div>
+          </div>
+        </div>
+      )}
+
+      {editOpen && editTarget && (
+        <div className="modal-backdrop">
+          <div className="modal-card product-modal-card">
+            <div className="modal-head">
+              <div>
+                <p className="modal-eyebrow">Stock</p>
+                <h3 className="modal-title">Modifier le produit</h3>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Fermer la fenêtre"
+                onClick={() => setEditOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="modal-subtitle">
+              Ajuste l'identité, l'emplacement, les quantités et les infos nutritionnelles utilisées par les recettes.
+            </p>
+
+            <div className="modal-context-row">
+              <span>{editCategory || 'Sans catégorie'}</span>
+              <span>{editPlace || settings.defaultPlace}</span>
+              <span>{editProductQuantityLabel}</span>
+            </div>
+
+            <div className="form-grid modal-form-grid product-modal-grid">
+              <div className="field-group full">
+                <label className="field-label">Nom</label>
+                <input className="field-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
+              </div>
+
+              <div className="field-group full">
+                <label className="field-label">Nom pour recettes/courses</label>
+                <input
+                  className="field-input"
+                  value={editGenericName}
+                  onChange={(e) => setEditGenericName(e.target.value)}
+                  placeholder="Ex : pâtes, lait, moutarde..."
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Marque</label>
+                <input className="field-input" value={editBrand} onChange={(e) => setEditBrand(e.target.value)} />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Code-barres</label>
+                <input className="field-input" value={editBarcode} onChange={(e) => setEditBarcode(e.target.value)} />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Catégorie</label>
+                <select
+                  className="field-input"
+                  value={editCategory}
+                  onChange={(e) => setEditCategory(e.target.value as MainCategory | '')}
+                >
+                  <option value="">(Aucune)</option>
+                  {MAIN_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+
+              {getSubcatsFor(editCategory).length > 0 && (
+                <div className="field-group">
+                  <label className="field-label">Sous-catégorie</label>
+                  <select
+                    className="field-input"
+                    value={editSubCategory}
+                    onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
+                  >
+                    <option value="">(Aucune)</option>
+                    {getSubcatsFor(editCategory).map((sc) => (
+                      <option key={sc} value={sc}>
+                        {sc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="field-group">
+                <label className="field-label">Lieu</label>
+                <input className="field-input" value={editPlace} onChange={(e) => setEditPlace(e.target.value)} />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Quantité</label>
+                <input className="field-input" value={editQty} onChange={(e) => setEditQty(e.target.value)} />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Unité</label>
+                <select className="field-input" value={editUnit} onChange={(e) => setEditUnit(e.target.value)}>
+                  {UNIT_OPTIONS.map((u) => (
+                    <option key={u.value} value={u.value}>{u.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">kcal / 100g</label>
+                <input
+                  className="field-input"
+                  value={editKcal100g}
+                  onChange={(e) => setEditKcal100g(e.target.value)}
+                  placeholder="ex: 250"
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Grammes par unité</label>
+                <input
+                  className="field-input"
+                  value={editGramsPerUnit}
+                  onChange={(e) => setEditGramsPerUnit(e.target.value)}
+                  placeholder="ex: 125"
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Densité g/ml</label>
+                <input
+                  className="field-input"
+                  value={editDensityGml}
+                  onChange={(e) => setEditDensityGml(e.target.value)}
+                  placeholder="ex: 1.00"
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Date de péremption</label>
+                <input
+                  type="date"
+                  className="field-input"
+                  value={editExpiration}
+                  onChange={(e) => setEditExpiration(e.target.value)}
+                />
+                <button type="button" className="btn-tertiary field-inline-action" onClick={() => setEditExpiration('')}>
+                  Effacer la date
+                </button>
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">Type de date</label>
+                <select
+                  className="field-input"
+                  value={editExpirationType}
+                  onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
+                  disabled={!editExpiration}
+                >
+                  <option value="dlc">DLC - à consommer jusqu'au</option>
+                  <option value="ddm">DDM - à consommer de préférence avant</option>
+                  <option value="unknown">Inconnu</option>
+                </select>
+              </div>
+
+              <div className="field-group">
+                <label className="field-label">État</label>
+                <select
+                  className="field-input"
+                  value={editIsOpen ? 'open' : 'closed'}
+                  onChange={(e) => setEditIsOpen(e.target.value === 'open')}
+                >
+                  <option value="closed">Non ouvert</option>
+                  <option value="open">Ouvert</option>
+                </select>
+              </div>
+            </div>
+
+            {autoFillLoading && (
+              <p className="error-text" style={{ color: '#4b5563' }}>
+                Recherche des informations du produit…
+              </p>
+            )}
+
+            {info && <p className="info-text">{info}</p>}
+            {error && <p className="error-text">{error}</p>}
 
             <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => setEditRecipeOpen(false)}>
+              <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>
                 Annuler
               </button>
-              <button type="button" className="btn-primary" onClick={() => void saveEditRecipe()}>
-                Enregistrer
+              <button type="button" className="btn-primary" disabled={editSaving} onClick={() => void saveEdit()}>
+                {editSaving ? 'Enregistrement…' : 'Enregistrer'}
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {editOpen && editTarget && ( 
-  <div className="modal-backdrop">
-    <div className="modal-card">
-      <div className="modal-head">
-        <h3 style={{ margin: 0 }}>Modifier un produit</h3>
-        <button type="button" className="modal-close" onClick={() => setEditOpen(false)}>
-          ✕
-        </button>
-      </div>
-
-      <div className="form-grid" style={{ marginTop: '0.5rem' }}>
-        <div className="field-group full">
-          <label className="field-label">Nom</label>
-          <input className="field-input" value={editName} onChange={(e) => setEditName(e.target.value)} />
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">Marque</label>
-          <input className="field-input" value={editBrand} onChange={(e) => setEditBrand(e.target.value)} />
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">Catégorie</label>
-          <select
-            className="field-input"
-            value={editCategory}
-            onChange={(e) => setEditCategory(e.target.value as MainCategory | '')}
-          >
-            <option value="">(Aucune)</option>
-            {MAIN_CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">Lieu</label>
-          <input className="field-input" value={editPlace} onChange={(e) => setEditPlace(e.target.value)} />
-        </div>
-        {getSubcatsFor(editCategory).length > 0 && (
-          <div className="field-group">
-            <label className="field-label">Sous-catégorie</label>
-            <select
-              className="field-input"
-              value={editSubCategory}
-              onChange={(e) => setEditSubCategory(e.target.value as SubCategory | '')}
-            >
-              <option value="">(Aucune)</option>
-              {getSubcatsFor(editCategory).map((sc) => (
-                <option key={sc} value={sc}>
-                  {sc}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        <div className="field-group">
-          <label className="field-label">Quantité</label>
-          <input className="field-input" value={editQty} onChange={(e) => setEditQty(e.target.value)} />
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">Unité</label>
-          <select className="field-input" value={editUnit} onChange={(e) => setEditUnit(e.target.value)}>
-            {UNIT_OPTIONS.map((u) => (
-              <option key={u.value} value={u.value}>{u.label}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">Date de péremption (optionnelle)</label>
-          <input
-            type="date"
-            className="field-input"
-            value={editExpiration}
-            onChange={(e) => setEditExpiration(e.target.value)}
-          />
-          <button type="button" className="btn-tertiary" onClick={() => setEditExpiration('')}>
-            Effacer la date
-          </button>
-        </div>
-        
-        <div className="field-group">
-          <label className="field-label">Type de date</label>
-          <select
-            className="field-input"
-            value={editExpirationType}
-            onChange={(e) => setEditExpirationType(e.target.value as ExpirationType)}
-            disabled={!editExpiration}
-          >
-            <option value="dlc">DLC - à consommer jusqu'au</option>
-            <option value="ddm">DDM - à consommer de préférence avant</option>
-            <option value="unknown">Inconnu</option>
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label className="field-label">État</label>
-          <select
-            className="field-input"
-            value={editIsOpen ? 'open' : 'closed'}
-            onChange={(e) => setEditIsOpen(e.target.value === 'open')}
-          >
-            <option value="closed">Non ouvert</option>
-            <option value="open">Ouvert</option>
-          </select>
-        </div>    
-
-        <div className="field-group full">
-          <label className="field-label">Code-barres</label>
-          <input className="field-input" value={editBarcode} onChange={(e) => setEditBarcode(e.target.value)} />
-        </div>
-      </div>
-
-      {autoFillLoading && (
-        <p className="error-text" style={{ color: '#4b5563' }}>
-          Recherche des informations du produit…
-        </p>
-      )}
-
-      {info && <p className="info-text">{info}</p>}
-      {error && <p className="error-text">{error}</p>}
-
-      <div className="modal-actions">
-        <button type="button" className="btn-secondary" onClick={() => setEditOpen(false)}>
-          Annuler
-        </button>
-        <button type="button" className="btn-primary" disabled={editSaving} onClick={() => void saveEdit()}>
-          {editSaving ? 'Enregistrement…' : 'Enregistrer'}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
 
       <div className="app-shell">
         <aside className="sidebar">
           <div className="sidebar-header">
-            <div className="sidebar-logo">🥫</div>
+            <div className="sidebar-logo" aria-hidden="true">V</div>
             <div>
-              <div className="sidebar-title">PantryPilot</div>
-              <div className="sidebar-subtitle">Tes placards, en automatique</div>
+              <div className="sidebar-title">VPlacard</div>
+              <div className="sidebar-subtitle">Cuisine, stock & menus</div>
             </div>
           </div>
 
@@ -4943,7 +6371,7 @@ const renderStockTab = () => {
                 className={'sidebar-item' + (activeTab === item.key ? ' sidebar-item--active' : '')}
                 onClick={() => setActiveTab(item.key)}
               >
-                <span className="sidebar-item-icon">{item.icon}</span>
+                <span className={`sidebar-item-icon sidebar-item-icon--${item.icon}`} aria-hidden="true" />
                 <span className="sidebar-item-label">{item.label}</span>
               </button>
             ))}
@@ -4951,16 +6379,24 @@ const renderStockTab = () => {
 
           <div className="sidebar-footer">
             <div className="sidebar-footer-box">
-              <div className="sidebar-footer-title">Roadmap</div>
+              <div className="sidebar-footer-title">Cuisine du jour</div>
               <div className="sidebar-footer-text">
-                À venir : suggestions de recettes, partage de foyer…
+                Scanner un produit, sauver un ingrédient, préparer les courses.
               </div>
+              <button type="button" className="sidebar-scan-btn btn-with-icon" onClick={() => setShowScanner(true)}>
+                <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+                Scanner un produit
+              </button>
             </div>
           </div>
         </aside>
 
         <main className="main">{mainContent}</main>
       </div>
+      <button type="button" className="floating-scan" onClick={() => setShowScanner(true)}>
+        <span className="btn-symbol btn-symbol--scan" aria-hidden="true" />
+        Scanner un produit
+      </button>
     </div>
   );
 }

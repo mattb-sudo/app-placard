@@ -1,73 +1,39 @@
-# React + TypeScript + Vite
+# VPlacard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Application React/Vite pour gérer un stock de cuisine, des recettes, un planning repas et une liste de courses.
 
-Currently, two official plugins are available:
+## Lancer en local
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Variables nécessaires dans `.env` ou `.env.local` :
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
 ```
+
+## Scripts
+
+```bash
+npm run lint
+npm run build
+npm run seed:media
+```
+
+`seed:media` télécharge les images par défaut et les envoie dans le bucket Supabase `vplacard-media`. Le script est idempotent : les fichiers déjà présents sont ignorés.
+
+## Supabase
+
+Le setup média est documenté dans `supabase/setup-media.sql` :
+
+- bucket public `vplacard-media`
+- table `image_assets` pour les photos personnalisées de l'app et des recettes
+- table `recipe_overrides` pour modifier les recettes d'exemple
+- RLS + policies publiques adaptées à l'app client-only actuelle
+- RLS activé sur `week_meals` pour éviter une table publique sans policy
+
+À durcir avant une vraie version multi-utilisateur : ajouter l'authentification, un `user_id` sur les tables métier et remplacer les policies publiques par des policies propriétaires.
