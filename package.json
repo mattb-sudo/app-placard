@@ -1,12 +1,15 @@
 {
-  "name": "placard-app",
+  "name": "vplacard",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Application React pour suivre un stock de cuisine, planifier les repas et préparer les courses avec Supabase.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "preview": "vite preview",
     "seed:media": "node scripts/seed-vplacard-media.mjs"
   },
@@ -26,6 +29,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "prettier": "^3.9.8",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4"
